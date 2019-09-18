@@ -10,7 +10,7 @@ FABRIC_INPUT_PARAMETERS = \
      'air porosity': 0.931,  # %
      'dry density': 1300,  # [kg/m^3]
      'specific heat': 1360,  # [J/ Kg K ]
-     'thickness': 0.00857,  # [m]
+     'fabric thickness': 0.00857,  # [m]
      'R_ef': 23.4  # [m^2 Pa / W]
      }
 
