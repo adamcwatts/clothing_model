@@ -1,5 +1,8 @@
 import numpy as np
+import pandas as pd
 import scipy
+import MODEL_BC_IC
+import math
 
 
 def absorption(rh):
@@ -66,25 +69,89 @@ def evap_res_to_diffusion_res(temp_c, R_ef):
 def fabric_parameters(fabric_dictionary):
     AIR_SPECIFIC_HEAT_CAPACITY = 1.007  # [J/ kg K]
 
-    fabric_porosity = 1 - AIR_SPECIFIC_HEAT_CAPACITY  # estimated porosity of fabric
+    fabric_porosity = 1 - fabric_dictionary['% porosity of air in fabric']  # estimated porosity of fabric
     p_fab_dry = fabric_dictionary['dry fiber density'] * fabric_porosity  # [kg/m^3]
     fabric_specific_heat_capacity = (fabric_dictionary['fiber specific heat'] * fabric_porosity) + \
-                                    (fabric_dictionary['air porosity'] * AIR_SPECIFIC_HEAT_CAPACITY)
+                                    (fabric_dictionary['% porosity of air in fabric'] * AIR_SPECIFIC_HEAT_CAPACITY)
     diffusion_resistance = evap_res_to_diffusion_res(35, fabric_dictionary['R_ef'])  # TODO CHECK WHY 35?
-    diffusivity_water_though_fabric = fabric_parameters['fabric thickness'] / diffusion_resistance
+    diffusivity_water_though_fabric = fabric_dictionary['fabric thickness'] / diffusion_resistance
 
     fabric_dictionary['fabric_porosity'] = fabric_porosity
-    fabric_dictionary['dry fabric density'] = p_fab_dry
+    fabric_dictionary['dry fiber density'] = p_fab_dry
     fabric_dictionary['fabric specific heat capacity'] = fabric_specific_heat_capacity
-    fabric_dictionary['diffusivity water though fabric'] = diffusivity_water_though_fabric
+    fabric_dictionary['diffusivity of water though fabric'] = diffusivity_water_though_fabric
 
     return fabric_dictionary
-    # TODO write a return to include either fabric parameters dictionary or array
 
 
-# VERIFY ABSORPTION FUNCTION
+def fabric_1D_meshing(fabric_dictionary, number_of_nodes, fraction_spacing_of_elements):
+    # Generates 1D element from inputs, such as thickness of fabric and the spacing of the finite elements
+    # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
+    # 2) Number of elements: How many times to split up fabric e.g. 1mm fabric where 3=number of elements, 1/3mm element
+    #   (data type- double, 1x1 array)
 
-# relative_h = np.linspace(0, 1, 10)
-# print(absorption(relative_h))
+    #  OPTIONAL INPUT
+    #
+    #  3) Fraction_Spacing_of_elements: overrides input 2. Custom spacing fabric
+    #   (data type- double, 1xn array)
 
-print(evap_res_to_diffusion_res(34, 20))
+    # node_name = []
+    # node_length = []
+
+    if fraction_spacing_of_elements is None:
+        node_length = np.empty(number_of_nodes)  # create empty array
+        size_between_nodes = fabric_dictionary['fabric thickness'] / number_of_nodes  # calculate uniform spacing
+        node_length.fill(size_between_nodes)  # fill array with said thickness above
+
+    elif fraction_spacing_of_elements is not None:
+        tolerance = 10 ** -10
+        if not math.isclose(1, sum(fraction_spacing_of_elements), abs_tol=tolerance):
+            print(f'ERROR - Total sum of fraction_spacing_of_elements needs to be equal to 1 or less than {tolerance}')
+            return
+
+        else:
+            node_length = fabric_dictionary['fabric thickness'] * fraction_spacing_of_elements
+            number_of_nodes += 1
+
+    node_names = [f'fabric element {x}' for x in range(number_of_nodes)]  # list comprehension of node names
+    data = {'Element': node_names, 'Length': node_length}  # combines into dictionary
+    fabric_df = pd.DataFrame(data)  # dictionary to pandas data frame structure
+    return fabric_df
+
+
+def fractional_spacing_generator(number_of_nodes, number_gradient_at_end):
+    n = number_gradient_at_end
+
+    if n == 0:
+        element_ratio = np.ones(number_of_nodes) / number_of_nodes
+        return element_ratio
+
+    new_nodes = (number_of_nodes + 1) + (n - 1) * 2
+    element_ratio = np.ones(new_nodes)
+    element_ratio[n:-n] = (1 / number_of_nodes)
+    if n == 1:
+        value = (1 / number_of_nodes) * (1 / 2) ** 1
+        element_ratio[0] = value
+        element_ratio[-1] = value
+
+    if n >= 2:
+        # print((n - i), (1 / number_of_nodes) * (1 / 2) ** (n + 0))
+        for i in range(1, n):
+            # print((n - i), (-n + (i - 1)))
+
+            element_ratio[n - i] = (1 / number_of_nodes) * (1 / 2) ** (i + 1)
+            element_ratio[-n + (i - 1)] = (1 / number_of_nodes) * (1 / 2) ** (i + 1)
+
+        repeat_value = (1 / number_of_nodes) * (1 / 2) ** (n)
+        element_ratio[0] = repeat_value
+        element_ratio[-1] = repeat_value
+
+    # print('SUM:', sum(element_ratio), '\n')
+
+    return element_ratio
+
+
+print(fractional_spacing_generator(4, 2))
+
+# element_fraction = fractional_spacing_generator(MODEL_BC_IC.NUMBER_OF_NODES)
+# print(fabric_1D_meshing(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS, MODEL_BC_IC.NUMBER_OF_NODES, element_fraction))
