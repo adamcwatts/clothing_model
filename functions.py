@@ -5,41 +5,48 @@ import MODEL_BC_IC
 import math
 
 
-def absorption(rh):
+def absorption(rh: 'array fraction') -> float:
     # rh is relative humidity array
     # if relative humidity is bound between 0 and 1, can vector-ize function
 
     number_of_elements = rh.shape[0]
-    rh_tuple = (number_of_elements)
+    # rh_tuple = number_of_elements
 
-    gain = np.ones(rh_tuple)
-    vect_func = np.vectorize(regain_function)
+    gain = np.ones(number_of_elements)
+    vect_func = np.vectorize(regain_function, otypes=[float])  # specifies output is float, works when given empty set
+
+    # vectorized approach not needed anymore
+
     # gain = vect_func(rh)
 
-    for k in range(number_of_elements):
-
-        if rh[k] <= 0:
-            gain[k] = 0
-
-        elif rh[k] <= 1:
-            gain[k] = regain_function(rh[k])
-
-        elif rh[k] > 1:
-            gain[k] = regain_function(1)
-    # gain = gain[rh <= 0] * 0
+    # for k in range(number_of_elements):
     #
-    # gain = gain[rh < 1] * vect_func(rh[rh < 1])
+    #     if rh[k] <= 0:
+    #         gain[k] = 0
     #
-    # gain = gain[rh > 1] * vect_func(rh[rh > 1] == 1)
+    #     elif rh[k] <= 1:
+    #         gain[k] = regain_function(rh[k])
+    #
+    #     elif rh[k] > 1:
+    #         gain[k] = regain_function(1)
+
+    # when rh <= 0
+    gain[rh <= 0] = gain[rh <= 0] * 0
+
+    # when 0 <= rh <= 1
+    gain[rh <= 1] = gain[rh <= 1] * vect_func(rh[rh <= 1])
+
+    # when rh > 1
+    gain[rh > 1] = gain[rh > 1] * vect_func(1)
 
     return gain
 
 
-def regain_function(rh):
+def regain_function(rh: 'fraction') -> float:
     return 0.55 * rh * ((1.0 / (0.25 + rh)) + (1.0 / (1.25 - rh)))
 
 
-def h_vap_calc(t_celsius, t_kelvin):
+def h_vap_calc(t_celsius: 'celsius', t_kelvin: 'Kelvin') -> 'Joules/gram':
     if t_celsius is not None:  # If Celsius is given
         t_kelvin = t_celsius + 273.15
         enthalpy_vapor = 0.001 * (2.792 * 10 ** 6 - 160 * t_kelvin - 3.43 * t_kelvin ** 2)
@@ -49,7 +56,7 @@ def h_vap_calc(t_celsius, t_kelvin):
     return enthalpy_vapor
 
 
-def evap_res_to_diffusion_res(temp_c, R_ef):
+def evap_res_to_diffusion_res(t_celsius: 'celsius', R_ef: 'm ^ 2 Pa / W') -> 's/m':
     # INPUTS:
     # 1) Temperature of Hot Plate when test occurred to get R_ef
     # 2) Evaporative Resistance [m ^ 2 Pa / W ] which reduces to [s / m]
@@ -58,8 +65,8 @@ def evap_res_to_diffusion_res(temp_c, R_ef):
 
     molecular_weight_h20 = 18.01528  # g / mol
     R_gas_constant = 8.3144598  # J / mol / K
-    temp_k = temp_c + 273.15  # Celsius to Kelvin
-    enthalpy_vapor = h_vap_calc(temp_c, temp_k)  # [J / g]
+    temp_k = t_celsius + 273.15  # Celsius to Kelvin
+    enthalpy_vapor = h_vap_calc(t_celsius, temp_k)  # [J / g]
 
     diffusion_resistance = R_ef * ((molecular_weight_h20 * enthalpy_vapor) / (R_gas_constant * temp_k))
 
@@ -84,7 +91,7 @@ def fabric_parameters(fabric_dictionary):
     return fabric_dictionary
 
 
-def fabric_1D_meshing(fabric_dictionary, number_of_nodes, fraction_spacing_of_elements):
+def fabric_1D_meshing(fabric_dictionary, number_of_nodes, fraction_spacing_of_elements=None):
     # Generates 1D element from inputs, such as thickness of fabric and the spacing of the finite elements
     # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
     # 2) Number of elements: How many times to split up fabric e.g. 1mm fabric where 3=number of elements, 1/3mm element
@@ -151,7 +158,62 @@ def fractional_spacing_generator(number_of_nodes, number_gradient_at_end):
     return element_ratio
 
 
-print(fractional_spacing_generator(4, 2))
+# TODO test concentration_calc
+def concentration_calc(t_celsius: 'celsius', rh: 'relative humidity', t_kelvin: 'Kelvin' = None) -> 'g/m^3':
+    R = 8.3144598 * 10 ** 3  # [cm^3 kPa K^−1 mol^−1]
+    molecular_weight_H2O = 18.01528  # [g / mol]
 
-# element_fraction = fractional_spacing_generator(MODEL_BC_IC.NUMBER_OF_NODES)
-# print(fabric_1D_meshing(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS, MODEL_BC_IC.NUMBER_OF_NODES, element_fraction))
+    if t_kelvin is None:
+        c_mol = (saturated_vapor_pressure(t_celsius) * rh) / (R * (t_celsius + 273.15))  # [mol/cm^3]
+        c_gram = c_mol * molecular_weight_H2O  # returns [g/cm^3]
+        c_mol *= 10 ** 6  # [g/m^3]
+    else:
+        c_mol = (saturated_vapor_pressure(t_kelvin) * rh) / (R * t_kelvin)  # [mol/cm^3]
+        c_gram = c_mol * molecular_weight_H2O  # returns [g/cm^3]
+        c_mol *= 10 ** 6  # [g/m^3]
+
+    return c_mol
+
+
+def saturated_vapor_pressure(t_celsius: 'celsius', number_of_nodes=None) -> 'kPa':
+    if number_of_nodes is not None:
+        node_count = t_celsius.shape[0]
+        pressure_saturated = np.zerps(node_count)  # TODO import node_count from global variable space?
+
+    pressure_saturated = np.ones(number_of_nodes)
+    vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
+    vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otypes=[float])
+
+    pressure_saturated[t_celsius > 0] = pressure_saturated[t_celsius > 0] * vp_equation_greater_than_freezing(
+        t_celsius[t_celsius > 0])
+
+    pressure_saturated[t_celsius <= 0] = pressure_saturated[t_celsius <= 0] * vp_equation_less_than_freezing(
+        t_celsius[t_celsius <= 0])
+
+    return pressure_saturated
+
+
+def sat_vapor_pressure_eq_greater_0(t_celsius: 'celsius') -> 'kPa':
+    vapor_pressure = math.exp(34.494 - (4924.99 / (t_celsius + 237.1))) / (t_celsius + 105) ** 1.57  # [kPa]
+    vapor_pressure /= 1000  # Takes Pa and converts to kPa
+    return vapor_pressure
+
+
+def sat_vapor_pressure_eq_less_0(t_celsius: 'celsius') -> 'kPa':
+    vapor_pressure = math.exp(43.494 - (6545.8 / (t_celsius + 278))) / (t_celsius + 868) ** 2  # [kPa]
+    vapor_pressure /= 1000  # Takes Pa and converts to kPa
+    vapor_pressure = math.exp(43.494 - (6545.8 / (t_celsius + 278.0))) / (t_celsius + 868) ** 2.0  # [kPa]
+    vapor_pressure /= 1000  # Takes Pa and converts to kPa
+    return vapor_pressure
+
+
+if __name__ == '__main__':
+    # print(fractional_spacing_generator(4, 2))
+
+    a = np.linspace(-10, 50, 5)
+
+    print(saturated_vapor_pressure(a, 5))
+    # print(absorption(a * 2))
+    # print(h_vap_calc.__annotations__)
+    # element_fraction = fractional_spacing_generator(MODEL_BC_IC.NUMBER_OF_NODES)
+    # print(fabric_1D_meshing(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS, MODEL_BC_IC.NUMBER_OF_NODES, element_fraction))
