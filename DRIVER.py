@@ -2,20 +2,39 @@ import functions
 import MODEL_BC_IC as MODEL
 import numpy as np
 import pandas as pd
+from time import time
 
 
-def fabric_initial_conditions_to_df(fabric_initial_condition: 'temp and relative humidity') -> 'Pandas array':
+def convert_float_to_array(dictionary) -> 'dictionary with numpy array values':
+    for key, value in dictionary.items():
+        dictionary[key] = np.array([value])
+    return dictionary
+
+
+def fabric_initial_conditions_to_df(fabric_ic: 'temp and relative humidity',
+                                    fabric_data_dict: 'fabric data dictionary') -> 'Pandas array':
     # assumes fabric begins in an isothermal and iso-humid state
-    initial_condition = {}
-    for key, value in fabric_initial_condition.items():
+    temp_dict = {}
+    for key, value in fabric_ic.items():
+        value = value[0]  # turns 1D array into scalar
+        multiplier = np.ones(node_count)  # multiplies values by node count
 
         if key == 'initial clothing temp':
-            initial_condition['initial clothing temp [C]'] = value * np.ones(node_count)
-            initial_condition['initial clothing temp [K]'] = (value + 273.15) * np.ones(node_count)
+            temp_dict['initial clothing temp [C]'] = value * multiplier
+            temp_dict['initial clothing temp [K]'] = (value + 273.15) * multiplier
         else:
-            initial_condition[key] = value * np.ones(node_count)
+            temp_dict[key] = value * multiplier
 
-    df = pd.DataFrame.from_dict(initial_condition)
+    fabric_water_concentration = fabric_data_dict['dry fiber density'] * fabric_data_dict[
+        'regain'] * functions.absorption(np.array(fabric_ic['initial clothing rh']))
+
+    temp_dict['water concentration absorbed by fabric [kg/m^3]'] = fabric_water_concentration * multiplier
+
+    water_concentration_in_trapped_air_and_fabric = functions.concentration_calc(fabric_ic['initial clothing temp'],
+                                                                                 fabric_ic['initial clothing rh'])
+    temp_dict['water concentration in air [g/m^3]'] = water_concentration_in_trapped_air_and_fabric * multiplier
+
+    df = pd.DataFrame.from_dict(temp_dict)
     names = [f'Node {x}' for x in range(node_count)]
     df.index = names
     return df
@@ -59,5 +78,6 @@ if __name__ == '__main__':
     fabric_dimensions = functions.fabric_1D_meshing(fabric_data, node_count)
 
     boundary_conditions = MODEL.BOUNDARY_INPUT_PARAMETERS
-    initial_conditions = fabric_initial_conditions_to_df(MODEL.IC_INPUT_PARAMETERS)
-    print(initial_conditions)
+    model_fabric_initial_conditions = convert_float_to_array(MODEL.FABRIC_IC_INPUT)
+    fabric_df = fabric_initial_conditions_to_df(model_fabric_initial_conditions, fabric_data)
+    print(fabric_df)
