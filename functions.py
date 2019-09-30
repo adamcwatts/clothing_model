@@ -10,19 +10,29 @@ def absorption(rh: 'array fraction') -> float:
     # rh is relative humidity array
     # if relative humidity is bound between 0 and 1, can vectorize function
 
+    MAX_REGAIN = 2.6400
     number_of_elements = rh.shape[0]
     gain = np.ones(number_of_elements)
+
+    # g_zero = np.where(rh < 0)
+    # g_ones = np.where(rh > 1)
+
+    gain[np.where(rh <= 0)] = 0  # No negative relative humidity
+    gain[np.where(rh > 1)] = 2.64  # (PRE-CALCULATED MAX VALUE FROM FUNCTION CALL)
+
+    g_proper = np.where((rh > 0) & (rh < 1))  # collect indices for satisfying this condition
+    gain[g_proper] = vectorized_regain(rh[g_proper])
 
     # vect_func = np.vectorize(regain_function, otypes=[float])  # specifies output is float, works when given empty set
 
     # when rh <= 0
-    gain[rh <= 0] = gain[rh <= 0] * 0
+    # gain[rh <= 0] = gain[rh <= 0] * 0
 
     # when 0 <= rh <= 1
-    gain[rh <= 1] = gain[rh <= 1] * vectorized_regain(rh[rh <= 1])
-
-    # when rh > 1
-    gain[rh > 1] = gain[rh > 1] * vectorized_regain(1)
+    # gain[rh <= 1] = gain[rh <= 1] * vectorized_regain(rh[rh <= 1])
+    #
+    # # when rh > 1
+    # gain[rh > 1] = gain[rh > 1] * vectorized_regain(1)
 
     return gain
 
@@ -214,20 +224,9 @@ if __name__ == '__main__':
 
     # print(fractional_spacing_generator(4, 2))
 
-    a = np.linspace(0, 1, 11)
-    temp = np.linspace(20, 40, 11)
+    a = np.linspace(-0.5, 1.5, 10)
 
-    iterations = 1000000
-
-    start_time = time()
-    for i in range(iterations):
-        absorption(a)
-    print('abs_function vectorized Elapsed time:' + str(time() - start_time))
-
-    start_time = time()
-    for i in range(iterations):
-        absorption_nv(a)
-    print('abs_function non-vectorized  Elapsed time:' + str(time() - start_time))
+    print(np.subtract(absorption(a),absorption_nv(a)))
 
     # print(saturated_vapor_pressure(temp))
 
