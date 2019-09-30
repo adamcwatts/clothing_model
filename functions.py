@@ -3,42 +3,44 @@ import pandas as pd
 import scipy
 import MODEL_BC_IC
 import math
+from time import time
 
 
 def absorption(rh: 'array fraction') -> float:
     # rh is relative humidity array
-    # if relative humidity is bound between 0 and 1, can vector-ize function
+    # if relative humidity is bound between 0 and 1, can vectorize function
 
     number_of_elements = rh.shape[0]
-    # rh_tuple = number_of_elements
-
     gain = np.ones(number_of_elements)
-    vect_func = np.vectorize(regain_function, otypes=[float])  # specifies output is float, works when given empty set
 
-    # vectorized approach not needed anymore
-
-    # gain = vect_func(rh)
-
-    # for k in range(number_of_elements):
-    #
-    #     if rh[k] <= 0:
-    #         gain[k] = 0
-    #
-    #     elif rh[k] <= 1:
-    #         gain[k] = regain_function(rh[k])
-    #
-    #     elif rh[k] > 1:
-    #         gain[k] = regain_function(1)
+    # vect_func = np.vectorize(regain_function, otypes=[float])  # specifies output is float, works when given empty set
 
     # when rh <= 0
     gain[rh <= 0] = gain[rh <= 0] * 0
 
     # when 0 <= rh <= 1
-    gain[rh <= 1] = gain[rh <= 1] * vect_func(rh[rh <= 1])
+    gain[rh <= 1] = gain[rh <= 1] * vectorized_regain(rh[rh <= 1])
 
     # when rh > 1
-    gain[rh > 1] = gain[rh > 1] * vect_func(1)
+    gain[rh > 1] = gain[rh > 1] * vectorized_regain(1)
 
+    return gain
+
+
+def absorption_nv(rh):
+    number_of_elements = rh.shape[0]
+    gain = np.ones(number_of_elements)
+
+    for k in range(number_of_elements):
+
+        if rh[k] <= 0:
+            gain[k] = 0
+
+        elif rh[k] <= 1:
+            gain[k] = regain_function(rh[k])
+
+        elif rh[k] > 1:
+            gain[k] = regain_function(1)
     return gain
 
 
@@ -158,27 +160,26 @@ def fractional_spacing_generator(number_of_nodes, number_gradient_at_end):
     return element_ratio
 
 
-# TODO test concentration_calc
 def concentration_calc(t_celsius: 'celsius', rh: 'relative humidity', t_kelvin: 'Kelvin' = None) -> 'g/m^3':
     R = 8.3144598 * 10 ** 3  # [cm^3 kPa K^−1 mol^−1]
     molecular_weight_H2O = 18.01528  # [g / mol]
+    # saturated_vp_vectorized = np.vectorize(saturated_vapor_pressure)
 
     if t_kelvin is None:
         c_mol = (saturated_vapor_pressure(t_celsius) * rh) / (R * (t_celsius + 273.15))  # [mol/cm^3]
-        c_gram = c_mol * molecular_weight_H2O  # returns [g/cm^3]
+        c_mol *= molecular_weight_H2O  # returns [g/cm^3]
         c_mol *= 10 ** 6  # [g/m^3]
     else:
         c_mol = (saturated_vapor_pressure(t_kelvin) * rh) / (R * t_kelvin)  # [mol/cm^3]
-        c_gram = c_mol * molecular_weight_H2O  # returns [g/cm^3]
+        c_mol *= molecular_weight_H2O  # returns [g/cm^3]
         c_mol *= 10 ** 6  # [g/m^3]
 
     return c_mol
 
 
 def saturated_vapor_pressure(t_celsius: 'celsius', number_of_nodes=None) -> 'kPa':
-    if number_of_nodes is not None:
-        node_count = t_celsius.shape[0]
-        pressure_saturated = np.zerps(node_count)  # TODO import node_count from global variable space?
+    if number_of_nodes is None:
+        number_of_nodes = t_celsius.shape[0]
 
     pressure_saturated = np.ones(number_of_nodes)
     vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
@@ -208,11 +209,31 @@ def sat_vapor_pressure_eq_less_0(t_celsius: 'celsius') -> 'kPa':
 
 
 if __name__ == '__main__':
+    vectorized_regain = np.vectorize(regain_function,
+                                     otypes=[float])  # specifies output is float, works when given empty set
+
     # print(fractional_spacing_generator(4, 2))
 
-    a = np.linspace(-10, 50, 5)
+    a = np.linspace(0, 1, 11)
+    temp = np.linspace(20, 40, 11)
 
-    print(saturated_vapor_pressure(a, 5))
+    iterations = 1000000
+
+    start_time = time()
+    for i in range(iterations):
+        absorption(a)
+    print('abs_function vectorized Elapsed time:' + str(time() - start_time))
+
+    start_time = time()
+    for i in range(iterations):
+        absorption_nv(a)
+    print('abs_function non-vectorized  Elapsed time:' + str(time() - start_time))
+
+    # print(saturated_vapor_pressure(temp))
+
+    # print(concentration_calc(temp, a))
+    # print(concentration_calc.__annotations__)
+
     # print(absorption(a * 2))
     # print(h_vap_calc.__annotations__)
     # element_fraction = fractional_spacing_generator(MODEL_BC_IC.NUMBER_OF_NODES)
