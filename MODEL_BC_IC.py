@@ -22,11 +22,11 @@ BOUNDARY_INPUT_PARAMETERS = \
         'plate rh': 1,  # [fraction from 0 to 1]
     }
 
-IC_INPUT_PARAMETERS = \
+FABRIC_IC_INPUT = \
     {
         'initial clothing temp': 33.7,  # [Celsius]
         'initial clothing rh': 0.35,  # [fraction from 0 to 1]
-    }
+    }  # assumes iso-humid and iso-thermo
 
 
 TOLERANCE = 0
