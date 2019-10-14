@@ -3,7 +3,11 @@ import pandas as pd
 import scipy
 import MODEL_BC_IC
 import math
+import scipy
+from scipy.optimize import fsolve
 from time import time
+
+MOLECULAR_WEIGHT_H2O = 18.01528  # [g / mol]
 
 
 def absorption(rh: 'array fraction') -> float:
@@ -22,8 +26,6 @@ def absorption(rh: 'array fraction') -> float:
 
     g_proper = np.where((rh > 0) & (rh < 1))  # collect indices for satisfying this condition
     gain[g_proper] = vectorized_regain(rh[g_proper])
-
-    # vect_func = np.vectorize(regain_function, otypes=[float])  # specifies output is float, works when given empty set
 
     # when rh <= 0
     # gain[rh <= 0] = gain[rh <= 0] * 0
@@ -70,7 +72,7 @@ def h_vap_calc(t_celsius: 'celsius', t_kelvin: 'Kelvin') -> 'Joules/gram':
 
 def evap_res_to_diffusion_res(t_celsius: 'celsius', R_ef: 'm ^ 2 Pa / W') -> 's/m':
     # INPUTS:
-    # 1) Temperature of Hot Plate when test occurred to get R_ef
+    # 1) Temperature of Hot Plate when test occurred to get R_ef or any temp for dynamic value
     # 2) Evaporative Resistance [m ^ 2 Pa / W ] which reduces to [s / m]
     #
     # Output: Intrinsic evaporate Diffusion Resistance [s / m] Units: Second per meter
@@ -85,25 +87,28 @@ def evap_res_to_diffusion_res(t_celsius: 'celsius', R_ef: 'm ^ 2 Pa / W') -> 's/
     return diffusion_resistance
 
 
-def fabric_parameters(fabric_dictionary):
+def fabric_parameters(fabric_dictionary) -> 'updated fabric dictionary':
     AIR_SPECIFIC_HEAT_CAPACITY = 1.007  # [J/ kg K]
 
-    fabric_porosity = 1 - fabric_dictionary['% porosity of air in fabric']  # estimated porosity of fabric
+    fabric_porosity = 1 - fabric_dictionary['porosity of air in fabric']  # estimated porosity of fabric
     p_fab_dry = fabric_dictionary['dry fiber density'] * fabric_porosity  # [kg/m^3]
     fabric_specific_heat_capacity = (fabric_dictionary['fiber specific heat'] * fabric_porosity) + \
-                                    (fabric_dictionary['% porosity of air in fabric'] * AIR_SPECIFIC_HEAT_CAPACITY)
-    diffusion_resistance = evap_res_to_diffusion_res(35, fabric_dictionary['R_ef'])  # TODO CHECK WHY 35?
+                                    (fabric_dictionary['porosity of air in fabric'] * AIR_SPECIFIC_HEAT_CAPACITY)
+    diffusion_resistance = evap_res_to_diffusion_res(MODEL_BC_IC.FABRIC_IC_INPUT['initial clothing temp'],
+                                                     fabric_dictionary['R_ef'])  # TODO CHECK WHY 35?
     diffusivity_water_though_fabric = fabric_dictionary['fabric thickness'] / diffusion_resistance
 
     fabric_dictionary['fabric_porosity'] = fabric_porosity
-    fabric_dictionary['dry fiber density'] = p_fab_dry
-    fabric_dictionary['fabric specific heat capacity'] = fabric_specific_heat_capacity
-    fabric_dictionary['diffusivity of water though fabric'] = diffusivity_water_though_fabric
+    fabric_dictionary['dry fabric density [kg/m^3]'] = p_fab_dry
+    fabric_dictionary['dry fabric density [g/m^3]'] = p_fab_dry * 1000
+    fabric_dictionary['fabric specific heat capacity [J/ Kg K]'] = fabric_specific_heat_capacity
+    fabric_dictionary['diffusivity of water though fabric [m^2 /s]'] = diffusivity_water_though_fabric
 
     return fabric_dictionary
 
 
-def fabric_1D_meshing(fabric_dictionary, number_of_nodes, fraction_spacing_of_elements=None):
+def fabric_1D_meshing(fabric_dictionary, number_of_nodes,
+                      fraction_spacing_of_elements=None) -> 'turns fabric_dictionary into fabric pd data frame':
     # Generates 1D element from inputs, such as thickness of fabric and the spacing of the finite elements
     # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
     # 2) Number of elements: How many times to split up fabric e.g. 1mm fabric where 3=number of elements, 1/3mm element
@@ -132,10 +137,13 @@ def fabric_1D_meshing(fabric_dictionary, number_of_nodes, fraction_spacing_of_el
             node_length = fabric_dictionary['fabric thickness'] * fraction_spacing_of_elements
             number_of_nodes += 1
 
-    node_names = [f'fabric element {x}' for x in range(number_of_nodes)]  # list comprehension of node names
-    data = {'Element': node_names, 'Length': node_length}  # combines into dictionary
-    fabric_df = pd.DataFrame(data)  # dictionary to pandas data frame structure
-    return fabric_df
+    # node_names = [f'Fabric Node {x}' for x in range(number_of_nodes)]  # list comprehension of node names
+    # data = {'Thickness [m]': node_length}  # combines into dictionary
+    # fabric_df = pd.DataFrame(data)  # dictionary to pandas data frame structure
+    # fabric_df.index = node_names
+    # return fabric_df
+
+    return node_length
 
 
 def fractional_spacing_generator(number_of_nodes, number_gradient_at_end):
@@ -188,12 +196,12 @@ def concentration_calc(t_celsius: 'celsius', rh: 'relative humidity', t_kelvin: 
 
 
 def saturated_vapor_pressure(t_celsius: 'celsius', number_of_nodes=None) -> 'kPa':
+    #  HUANG - 2018 improved Saturated Vapor Pressure Formula
+
     if number_of_nodes is None:
         number_of_nodes = t_celsius.shape[0]
 
     pressure_saturated = np.ones(number_of_nodes)
-    vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
-    vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otypes=[float])
 
     pressure_saturated[t_celsius > 0] = pressure_saturated[t_celsius > 0] * vp_equation_greater_than_freezing(
         t_celsius[t_celsius > 0])
@@ -218,17 +226,99 @@ def sat_vapor_pressure_eq_less_0(t_celsius: 'celsius') -> 'kPa':
     return vapor_pressure
 
 
-if __name__ == '__main__':
-    vectorized_regain = np.vectorize(regain_function,
-                                     otypes=[float])  # specifies output is float, works when given empty set
+def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  #TODO Dont use iloc use index name
+    #  OUTPUT: multidimensional array where columns refer to node location: TODO: fix this
+    #
+    # Row (1) refers to density of fabric considering water regain
+    # Row (2) refers to specific heat capacity considering water regain
+    # Row (3) refers to thermal conductivity considering water regain
+    # Row (4) refers to the thickness of the fabric element (could be adjusted
+    # for swelling, but isn't)
+    #
+    # Row(5) Total thickness of the entire fabric layer
+    # Row(6) Diffusitvity value
 
+    wet_fabric_properties = {}
+
+    WATER_SPECIFIC_HEAT_CAPACITY = 4179  # [J / (kg K)]
+    # T. Bergman and A. Lavine, Fundamentals of Heat and Mass Transfer, 8th ed. Wiley.
+
+    THERMAL_CONDUCTIVITY_WATER = 0.613  # (W/mK) FUNCTION OF TEMP????
+    # T. Bergman and A. Lavine, Fundamentals of Heat and Mass Transfer, 8th ed. Wiley.
+
+    FABRIC_THERMAL_CONDUCTIVITY = 0.042  # W/mk TODO volumetric average not Lotens value
+    # W. A. Lotens, “Heat transfer from humans wearing clothing,” 1993.
+
+    number_of_nodes = fabric_df.shape[0]
+    # wet_fabric_params = np.array((number_of_nodes, 6))
+    extracted_data = fabric_df.iloc[0]
+    absorption_factor = absorption(environmental_rh.values)
+
+    gamma = (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor) / extracted_data.iloc[6]
+    # fractional density of water in fabric
+
+    wet_fabric_properties['density fraction of water in fabric [kg/m^3]'] = gamma
+
+    wet_fabric_density = extracted_data.iloc[6] + (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor)
+    # corrected density including water in fabric
+
+    wet_fabric_properties['wet fabric density [kg/m^3]'] = wet_fabric_density
+
+    wet_fabric_specific_heat = extracted_data.iloc[8] * (1 - gamma) + gamma * WATER_SPECIFIC_HEAT_CAPACITY
+    wet_fabric_properties['wet fabric specific heat [J/kg K]'] = wet_fabric_specific_heat
+
+    wet_fabric_thermal_conductivity = FABRIC_THERMAL_CONDUCTIVITY * (1 - gamma) + gamma * THERMAL_CONDUCTIVITY_WATER
+    wet_fabric_properties['wet fabric thermal conductivity [W/mk]'] = wet_fabric_thermal_conductivity
+
+    wet_fabric = pd.DataFrame.from_dict(wet_fabric_properties)
+    wet_fabric.index = fabric_df.index
+    return wet_fabric
+
+
+def relative_humidity_calc(concentration: 'grams / m^3 H20 in air', temp_kelvin: 'Kelvin') -> 'RH in fraction':
+    R = 8.3144598 * 10 ** (-3)  # [m^3 kPa / K mol]
+    molar_concentration = concentration / MOLECULAR_WEIGHT_H2O
+    vapor_pressure = molar_concentration * R * temp_kelvin
+    temperature_celsius = temp_kelvin - 273.15
+    relative_humidity = vapor_pressure / saturated_vapor_pressure(temperature_celsius)
+
+    return relative_humidity
+
+
+def rh_equilibrium(fabric_dataframe, water_vapor_concentration, temperature, previous_rh):  # TODO ATM, not important
+    def func_1(rh):
+        return fabric_dataframe['dry fabric density [g/m^3]'].array[0] * fabric_dataframe['regain'].array[0] * (
+                absorption(rh) - absorption(previous_rh))
+
+    def func_2(current_water_vapor_concentration):
+        return relative_humidity_calc(current_water_vapor_concentration - func_1(current_water_vapor_concentration),
+                                      temperature)
+
+    def func_3(rh):
+        return func_2(water_vapor_concentration) - water_vapor_concentration
+
+    guess = np.ones(water_vapor_concentration.shape[0]) * 0.6
+    fsolve(func_3, guess)
+
+    # rh_solution =
+
+
+# Vectorization of functions
+vectorized_regain = np.vectorize(regain_function,
+                                 otypes=[float])  # specifies output is float, works when given empty set
+vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
+vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otypes=[float])
+# relative_humidity_calc = np.vectorize(relative_humidity_calc)
+
+if __name__ == '__main__':
+    pass
     # print(fractional_spacing_generator(4, 2))
 
-    a = np.linspace(-0.5, 1.5, 10)
+    # a = np.linspace(-0.5, 1.5, 10)
+    # temps = np.linspace(10, 40, 4)
 
-    print(np.subtract(absorption(a),absorption_nv(a)))
 
-    # print(saturated_vapor_pressure(temp))
+    # print(np.subtract(absorption(a), absorption_nv(a)))
 
     # print(concentration_calc(temp, a))
     # print(concentration_calc.__annotations__)
