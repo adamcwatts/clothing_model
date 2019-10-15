@@ -188,7 +188,7 @@ def concentration_calc(t_celsius: 'celsius', rh: 'relative humidity', t_kelvin: 
         c_mol *= molecular_weight_H2O  # returns [g/cm^3]
         c_mol *= 10 ** 6  # [g/m^3]
     else:
-        c_mol = (saturated_vapor_pressure(t_kelvin) * rh) / (R * t_kelvin)  # [mol/cm^3]
+        c_mol = (saturated_vapor_pressure(t_kelvin - 273.15) * rh) / (R * t_kelvin)  # [mol/cm^3]
         c_mol *= molecular_weight_H2O  # returns [g/cm^3]
         c_mol *= 10 ** 6  # [g/m^3]
 
@@ -226,7 +226,27 @@ def sat_vapor_pressure_eq_less_0(t_celsius: 'celsius') -> 'kPa':
     return vapor_pressure
 
 
-def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  #TODO Dont use iloc use index name
+def condensation_check(concentration: 'concentration in grams per m^3',
+                       t_kelvin: 'Temperature in kelvin') -> 'array of concentration of  water condensate and vapor':
+    node_count = concentration.shape[0]
+    condensation_concentration = np.zeros(node_count)
+    concentration_water_vapor = np.zeros(node_count)
+
+    max_concentration = concentration_calc(None, np.ones(node_count), t_kelvin)
+
+    # mask where concentration in air is greater than saturation point
+    condensation_mask = np.where(concentration > max_concentration)
+    inverse_mask = np.setdiff1d(np.where(concentration), condensation_mask)  # inverse mask!
+
+    condensation_concentration[condensation_mask] = concentration[condensation_mask] - max_concentration[condensation_mask]
+    concentration_water_vapor[condensation_mask] = max_concentration[condensation_mask]
+
+    concentration_water_vapor[inverse_mask] = concentration[inverse_mask]
+
+    return condensation_concentration, concentration_water_vapor
+
+
+def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Dont use iloc use index name
     #  OUTPUT: multidimensional array where columns refer to node location: TODO: fix this
     #
     # Row (1) refers to density of fabric considering water regain
@@ -311,12 +331,18 @@ vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otyp
 # relative_humidity_calc = np.vectorize(relative_humidity_calc)
 
 if __name__ == '__main__':
-    pass
+
+    temps = np.array([20, 30, 50])
+    temps_kelvin = temps + 273.15
+    rh = np.array([0.0, 0.5, 1.25])
+
+    current_concen = concentration_calc(None, rh, temps_kelvin)
+
+    print(condensation_check(current_concen, temps_kelvin))
     # print(fractional_spacing_generator(4, 2))
 
     # a = np.linspace(-0.5, 1.5, 10)
     # temps = np.linspace(10, 40, 4)
-
 
     # print(np.subtract(absorption(a), absorption_nv(a)))
 
