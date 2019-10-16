@@ -8,6 +8,7 @@ from scipy.optimize import fsolve
 from time import time
 
 MOLECULAR_WEIGHT_H2O = 18.01528  # [g / mol]
+H_VAPORIZATION = 2418  # J / g
 
 
 def absorption(rh: 'array fraction') -> float:
@@ -238,7 +239,8 @@ def condensation_check(concentration: 'concentration in grams per m^3',
     condensation_mask = np.where(concentration > max_concentration)
     inverse_mask = np.setdiff1d(np.where(concentration), condensation_mask)  # inverse mask!
 
-    condensation_concentration[condensation_mask] = concentration[condensation_mask] - max_concentration[condensation_mask]
+    condensation_concentration[condensation_mask] = concentration[condensation_mask] - max_concentration[
+        condensation_mask]
     concentration_water_vapor[condensation_mask] = max_concentration[condensation_mask]
 
     concentration_water_vapor[inverse_mask] = concentration[inverse_mask]
@@ -323,6 +325,42 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration, temperature, pre
     # rh_solution =
 
 
+def q_condensation(condensation: "array of condensation [g/m^3] ", fabric_thickness: ' in [m]',
+                   time_step: 'in seconds') -> 'Condensation flux in [W/m^2]':
+    #  INPUTS:
+    #  condensation vector [1, n]  in [g/m^3]
+    #  fabric_thickness [1, n] for entire fabric discretization in [m]
+
+    # OUTPUTS:
+    # q_condensation array of heat evolved in [J/s m^2] or [W/m^2]
+
+    return (condensation * H_VAPORIZATION * fabric_thickness) / time_step;
+
+
+def q_evaporation(rh: 'array of relative humidity in fraction', condensation: "array of condensation [g/m^3] ",
+                  fabric_thickness: ' in [m]',
+                  time_step: 'in seconds') -> 'q_evaporation and concentration array':
+    #  INPUTS:
+    #  Relative Humidity vector [1, n]  in [fraction]
+    #  condensation vector [1, n]  in [g/m^3]
+    #  fabric_thickness [1, n] for entire fabric discrete in [m]
+    # time step of ODE function [s]
+
+    # OUTPUTS:
+    # q_evaporation array of heat evolved in [J/s m^2] or [W/m^2]
+    # condensation array corrected to 0 when evaporation takes place
+
+    nodes = rh.shape[0]
+    q_evap = np.zeros(nodes)
+
+    evap_mask = np.where((rh < 1.0) & (condensation > 0))
+
+    q_evap[evap_mask] = condensation[evap_mask] * H_VAPORIZATION * fabric_thickness[evap_mask] / time_step
+    condensation[evap_mask] = 0
+
+    return q_evap, condensation
+
+
 # Vectorization of functions
 vectorized_regain = np.vectorize(regain_function,
                                  otypes=[float])  # specifies output is float, works when given empty set
@@ -331,14 +369,11 @@ vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otyp
 # relative_humidity_calc = np.vectorize(relative_humidity_calc)
 
 if __name__ == '__main__':
-
     temps = np.array([20, 30, 50])
     temps_kelvin = temps + 273.15
     rh = np.array([0.0, 0.5, 1.25])
 
-    current_concen = concentration_calc(None, rh, temps_kelvin)
-
-    print(condensation_check(current_concen, temps_kelvin))
+    print(q_evaporation(np.array([0.5, 1, 1.25]), np.array([10, 10, 10]), np.array([0.001, 0.001, 0.001]), 0.01))
     # print(fractional_spacing_generator(4, 2))
 
     # a = np.linspace(-0.5, 1.5, 10)
