@@ -94,15 +94,23 @@ def odefun(t, y):
 
     material = 1 / (delta_x * np.multiply(C, P))
 
-    q_1_2 = (y[1] - boundary_conditions['air temp [K]']) * U[0]
+    temperature_array = np.append(y[1:], boundary_conditions['air temp [K]'])
+
+    q_conduction = np.diff(temperature_array) * -1 * U  # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
+
+    q_1_2 = (y[1] - y[2]) * U[0]
+    q_2_3 = (y[2] - y[3]) * U[1]
+    q_3_out = (y[3] - boundary_conditions['air temp [K]']) * U[2]  #
 
     # dydt = np.zeros(2)
 
     q_gen = (boundary_conditions['plate temp [K]'] - y[1]) * (K[0] / (delta_x[0] * 0.5))  # flux at plate ODE
 
     dydt_1 = material[0] * (y[0] - q_1_2)  # temp at node ODE
+    dydt_2 = material[1] * (q_1_2 - q_2_3)
+    dydt3 = material[2] * (q_2_3 - q_3_out)
 
-    dydt = [q_gen, dydt_1]
+    dydt = [q_gen, dydt_1, dydt_2, dydt3]
     return dydt
 
 
@@ -152,9 +160,33 @@ if __name__ == '__main__':
     df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
                                               df_fabric_initial_conditions['initial clothing rh'])
 
-    tspan = np.linspace(0, 10, 1100)
-    yinit = [0, 306.85]
+    # TEST RH Equilibrium Function
+
+    # temps_c = np.array([20, 30, 35, 40])
+    # temps_k = temps_c + 273.15
+    #
+    # incoming_air_rh = np.array([1, 1, 1, 1]) * 0.75
+    # prior_rh = np.array([1, 1, 1, 1]) * 0.25
+    #
+    # concent_grams = functions.concentration_calc(temps_c, incoming_air_rh)
+    #
+    # sol_temp = functions.rh_equilibrium(df_fabric_initial_conditions, concent_grams, temps_k, prior_rh)
+    # print(sol_temp)
+    # print(functions.rh_equilibrium.__annotations__)
+
+    # ODE STUFF BELOW
+
+    tspan = np.linspace(0, 900, 901)
+
+    # attach 0 at the 0 position to add initial plate heat flux
+    yinit = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
 
     sol = solve_ivp(odefun, [tspan[0], tspan[-1]], yinit, t_eval=tspan)
     print(sol.y)
-    sol_df = pd.DataFrame.from_dict({'Time': sol.t, 'Plate Heat Flux': sol.y[0], 'Temp at Fabric': sol.y[1]})
+
+    fabric_solutions = {f'Plate Heat flux {i+1}': sol.y[i+1] for i in range(node_count)}
+    fabric_solutions['Time (seconds)'] = sol.t
+    # sol_df = pd.DataFrame.from_dict({'Time (seconds)': sol.t, 'Plate Heat Flux': sol.y[0], 'Temp at Fabric 1': sol.y[1],
+    #                                  'Temp at Fabric 2': sol.y[2]})
+    sol_df = pd.DataFrame.from_dict(fabric_solutions)
+    sol_df = sol_df[[sol_df.columns.tolist()[-1]] + sol_df.columns.tolist()[:-1]]
