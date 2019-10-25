@@ -16,7 +16,12 @@ def absorption(rh: 'array fraction') -> float:
     # if relative humidity is bound between 0 and 1, can vectorize function
 
     MAX_REGAIN = 2.6400
-    number_of_elements = rh.shape[0]
+    try:
+        number_of_elements = rh.shape[0]
+    except IndexError:
+        number_of_elements = 1
+        rh = np.array([rh])
+
     gain = np.ones(number_of_elements)
 
     # g_zero = np.where(rh < 0)
@@ -200,7 +205,11 @@ def saturated_vapor_pressure(t_celsius: 'celsius', number_of_nodes=None) -> 'kPa
     #  HUANG - 2018 improved Saturated Vapor Pressure Formula
 
     if number_of_nodes is None:
-        number_of_nodes = t_celsius.shape[0]
+        try:
+            number_of_nodes = t_celsius.shape[0]
+        except IndexError:
+            number_of_nodes = 1
+            t_celsius = np.array([t_celsius])
 
     pressure_saturated = np.ones(number_of_nodes)
 
@@ -307,22 +316,28 @@ def relative_humidity_calc(concentration: 'grams / m^3 H20 in air', temp_kelvin:
     return relative_humidity
 
 
-def rh_equilibrium(fabric_dataframe, water_vapor_concentration, temperature, previous_rh):  # TODO ATM, not important
-    def func_1(rh):
-        return fabric_dataframe['dry fabric density [g/m^3]'].array[0] * fabric_dataframe['regain'].array[0] * (
-                absorption(rh) - absorption(previous_rh))
+def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20 in the air", temperature: 'Kelvin',
+                   previous_rh: 'Fabrics previous RH state') -> \
+        'RH equilibrium between fabric and air due to sorption process':  # TODO ATM, not important
 
-    def func_2(current_water_vapor_concentration):
-        return relative_humidity_calc(current_water_vapor_concentration - func_1(current_water_vapor_concentration),
-                                      temperature)
+    def func_1(x):
+        # change_in_concentration of water absorbed water by fabric due to change in RH
+        return fabric_dataframe['dry fabric density [g/m^3]'].array[0] * \
+               fabric_dataframe['regain'].array[0] * (absorption(x) - absorption(previous_rh))
 
-    def func_3(rh):
-        return func_2(water_vapor_concentration) - water_vapor_concentration
+    def func_2(current_water_vapor_concentration, x):
+        # change_in_RH in the air due to the fabric absorbing water from the air
+        return relative_humidity_calc(current_water_vapor_concentration - func_1(x), temperature)
 
-    guess = np.ones(water_vapor_concentration.shape[0]) * 0.6
-    fsolve(func_3, guess)
+    def func_3(x):
+        return func_2(water_vapor_concentration, x) - x
 
-    # rh_solution =
+    guess = np.ones(water_vapor_concentration.shape[0]) * previous_rh
+    # guess = np.array([0.6])
+    rh_solution = fsolve(func_3, guess, maxfev=25)
+
+    # print(rh_solution)
+    return rh_solution
 
 
 def q_condensation(condensation: "array of condensation [g/m^3] ", fabric_thickness: ' in [m]',
@@ -366,6 +381,7 @@ vectorized_regain = np.vectorize(regain_function,
                                  otypes=[float])  # specifies output is float, works when given empty set
 vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
 vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otypes=[float])
+# rh_equilibrium = np.vectorize(rh_equilibrium, otypes=[float])
 # relative_humidity_calc = np.vectorize(relative_humidity_calc)
 
 if __name__ == '__main__':
