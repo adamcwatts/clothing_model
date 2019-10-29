@@ -207,7 +207,7 @@ def saturated_vapor_pressure(t_celsius: 'celsius', number_of_nodes=None) -> 'kPa
     if number_of_nodes is None:
         try:
             number_of_nodes = t_celsius.shape[0]
-        except IndexError:
+        except (IndexError, AttributeError):
             number_of_nodes = 1
             t_celsius = np.array([t_celsius])
 
@@ -402,5 +402,6 @@ if __name__ == '__main__':
 
     # print(absorption(a * 2))
     # print(h_vap_calc.__annotations__)
-    # element_fraction = fractional_spacing_generator(MODEL_BC_IC.NUMBER_OF_NODES)
+    element_fraction = fractional_spacing_generator(10,2)
+    print(element_fraction)
     # print(fabric_1D_meshing(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS, MODEL_BC_IC.NUMBER_OF_NODES, element_fraction))
