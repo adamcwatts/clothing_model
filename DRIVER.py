@@ -3,6 +3,7 @@ import MODEL_BC_IC as BC_IC  # BC_IC - Boundary and Initial Conditions
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt
 from time import time
 
 OPI = BC_IC.ODE_PHYSICS_INPUT
@@ -69,21 +70,20 @@ def boundary_conditions_with_kelvin(boundary_condition):
 
 def odefun(t, y):
     #  y[0] refers to heat flux needed by plate
-    #  y[1] refers to temperature at middle of clothing node
+    #  y[n] refers to temperature at nth node : 1 <= n <= number of nodes
 
-    ode_params = {}
-    # 6.5mm effective air layer thickness between outer textile and ambient air
+    # ode_params = {}
     # n numbers of nodes + 1 node for boundary at plate
 
-    # elements = z.shape[0]
-    #
-    # temp_at_plate = z[0]
+    temp_at_clothing_boundary = y[node_count]  # last element of vector associated with temperatures
 
-    # temp_at_clothing_boundary = y[1]
-    #
-    # h_radiation = OPI['eps_clothing'] * OPI['sigma'] * (
-    #         temp_at_clothing_boundary + boundary_conditions['air temp [K]']) * (
-    #                       temp_at_clothing_boundary ** 2 + boundary_conditions['air temp [K]'] ** 2)
+    h_radiation = OPI['eps_clothing'] * OPI['sigma'] * (
+            temp_at_clothing_boundary + boundary_conditions['air temp [K]']) * (
+                          temp_at_clothing_boundary ** 2 + boundary_conditions['air temp [K]'] ** 2)
+
+    # r_out = 1 / (h_radiation + OPI['h_convection'])    U_out = 1 / r_out
+
+    r_rad_convect = 1 / (h_radiation + OPI['h_convection'])
 
     delta_x = df_fabric_initial_conditions['thickness [m]'].to_numpy()
 
@@ -91,27 +91,72 @@ def odefun(t, y):
     C = df_wet_fabric['wet fabric specific heat [J/kg K]'].to_numpy()
     P = df_wet_fabric['wet fabric density [kg/m^3]'].to_numpy()
     U = K / delta_x
+    U[-1] = 1 / (r_rad_convect + 0.5 * (
+            delta_x[-1] / K[-1]))  # corrects last element for radiation, convection heat loss
 
     material = 1 / (delta_x * np.multiply(C, P))
 
     temperature_array = np.append(y[1:], boundary_conditions['air temp [K]'])
 
-    q_conduction = np.diff(temperature_array) * -1 * U  # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
-
-    q_1_2 = (y[1] - y[2]) * U[0]
-    q_2_3 = (y[2] - y[3]) * U[1]
-    q_3_out = (y[3] - boundary_conditions['air temp [K]']) * U[2]  #
-
-    # dydt = np.zeros(2)
+    q_dry = np.diff(temperature_array) * -1 * U  # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
+    q_dry = np.concatenate(([y[0]], q_dry), axis=0)  # adds heat flow from plate
 
     q_gen = (boundary_conditions['plate temp [K]'] - y[1]) * (K[0] / (delta_x[0] * 0.5))  # flux at plate ODE
+    clothing_dydt = material * np.diff(q_dry) * -1  # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
 
-    dydt_1 = material[0] * (y[0] - q_1_2)  # temp at node ODE
-    dydt_2 = material[1] * (q_1_2 - q_2_3)
-    dydt3 = material[2] * (q_2_3 - q_3_out)
+    dydt = np.concatenate(([q_gen], clothing_dydt), axis=0)
 
-    dydt = [q_gen, dydt_1, dydt_2, dydt3]
+    # q_1_2 = (y[1] - y[2]) * U[0]
+    # q_2_3 = (y[2] - y[3]) * U[1]
+    # q_3_out = (y[3] - boundary_conditions['air temp [K]']) * U[2]  #
+    #
+    # dydt_1 = material[0] * (y[0] - q_1_2)  # delta temp at node ODE 1
+    # dydt_2 = material[1] * (q_1_2 - q_2_3) # delta temp at node ODE 2
+    # dydt3 = material[2] * (q_2_3 - q_3_out) # delta temp at node ODE 3
+
+    # dydt = [q_gen, dydt_1, dydt_2, dydt3]
+
     return dydt
+
+
+def solution_to_df(ode_sol):
+    # takes ODE solution and creates data frame that's easy to read solutions off of
+
+    fabric_solutions = {f'Temp at Node {i + 1} [C]': ode_sol.y[i + 1] - 273.15 for i in range(node_count)}
+    fabric_solutions['Time (Minutes)'] = ode_sol.t / 60
+    fabric_solutions['Hot Plate Flux'] = ode_sol.y[0]
+
+    index_names = ode_sol.t
+    index_names = np.ndarray.tolist(ode_sol.t)
+    index_names = [str(name) + " [s]" for name in index_names]
+
+    # reorder so time is at the beginning of the Data Frame
+    sol_df = pd.DataFrame.from_dict(fabric_solutions)
+    sol_df = sol_df[sol_df.columns.tolist()[-2:] + sol_df.columns.tolist()[:-2]]  # reorder last 2 as first 2
+    sol_df.index = index_names  # add index names
+
+    return sol_df
+
+
+def solution_plots(solution_df):
+    middle_node = (node_count + 1) / 2
+
+    y_values = solution_df[f'Temp at Node {int(middle_node)} [C]'].to_numpy()
+    x_values = solution_df['Time (Minutes)'].to_numpy()
+
+    y_max = y_values.max()
+    y_min = y_values.min()
+
+    fig, ax = plt.subplots(ncols=1, figsize=(14, 7))
+
+    ax.set_ylim((y_min - 1, y_max + 1))
+    ax.set_xlim((0, x_values.max()))
+
+    ax.plot(x_values, y_values, label=f'Temperature at Node {middle_node} [C]')
+    ax.set_xlabel('Time [Minutes]')
+    ax.set_ylabel(r'Temperature $[\degreeC]$')
+    plt.savefig('Middle_Fabric_Node_Temp_C.pdf', bbox_inches="tight")
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -133,6 +178,7 @@ if __name__ == '__main__':
 
     enthalpy_sorption_history = zeros_array
 
+    # could condense this into a 3D array time X nodes X type of heat flow
     q_sorption = zeros_array
     q_condensation = zeros_array
 
@@ -176,17 +222,15 @@ if __name__ == '__main__':
 
     # ODE STUFF BELOW
 
-    tspan = np.linspace(0, 900, 901)
+    tspan = np.linspace(start, finish_seconds, finish_seconds + 1)
 
     # attach 0 at the 0 position to add initial plate heat flux
     yinit = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
 
-    sol = solve_ivp(odefun, [tspan[0], tspan[-1]], yinit, t_eval=tspan)
-    print(sol.y)
+    solution = solve_ivp(odefun, [tspan[0], tspan[-1]], yinit, t_eval=tspan)
+    print(solution.y)
 
-    fabric_solutions = {f'Plate Heat flux {i+1}': sol.y[i+1] for i in range(node_count)}
-    fabric_solutions['Time (seconds)'] = sol.t
-    # sol_df = pd.DataFrame.from_dict({'Time (seconds)': sol.t, 'Plate Heat Flux': sol.y[0], 'Temp at Fabric 1': sol.y[1],
-    #                                  'Temp at Fabric 2': sol.y[2]})
-    sol_df = pd.DataFrame.from_dict(fabric_solutions)
-    sol_df = sol_df[[sol_df.columns.tolist()[-1]] + sol_df.columns.tolist()[:-1]]
+    sol_df = solution_to_df(solution)
+    export_csv = sol_df.to_csv('solution_summary.csv', sep='\t', encoding='utf-8')
+
+    # solution_plots(sol_df)
