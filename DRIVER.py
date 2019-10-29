@@ -63,12 +63,18 @@ def boundary_conditions_with_kelvin(boundary_condition):
             new_key_kelvin = key + ' [K]'
             updated_boundary_conditions[new_key_celsius] = updated_boundary_conditions.pop(key)  # update key
             updated_boundary_conditions[new_key_kelvin] = value + 273.15  # kelvin
+            if 'air' in key:
+                updated_boundary_conditions['water concentration in ambient air [g/m^3]'] = \
+                    functions.concentration_calc(boundary_condition[key], boundary_condition['air rh'])[0]
+            if 'plate' in key:
+                updated_boundary_conditions['water concentration at plate [g/m^3]'] = \
+                    functions.concentration_calc(boundary_condition[key], boundary_condition['plate rh'])[0]
 
     # df = pd.DataFrame.from_dict(boundary_condition)
     return updated_boundary_conditions
 
 
-def odefun(t, y):
+def ode_plateflux_temp(t, y):
     #  y[0] refers to heat flux needed by plate
     #  y[n] refers to temperature at nth node : 1 <= n <= number of nodes
 
@@ -117,6 +123,12 @@ def odefun(t, y):
     # dydt = [q_gen, dydt_1, dydt_2, dydt3]
 
     return dydt
+
+
+def ode_concentration(t, c):
+    concentration_array = np.concatenate(
+        ([boundary_conditions['water concentration at plate [g/m^3]']], c,
+         [boundary_conditions['water concentration in ambient air [g/m^3]']]), axis=0)
 
 
 def solution_to_df(ode_sol):
@@ -225,12 +237,14 @@ if __name__ == '__main__':
     tspan = np.linspace(start, finish_seconds, finish_seconds + 1)
 
     # attach 0 at the 0 position to add initial plate heat flux
-    yinit = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
+    plate_flux_temp_init = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
 
-    solution = solve_ivp(odefun, [tspan[0], tspan[-1]], yinit, t_eval=tspan)
-    print(solution.y)
+    concentration_init = df_fabric_initial_conditions['water concentration in air [g/m^3]'].to_numpy()
 
-    sol_df = solution_to_df(solution)
-    export_csv = sol_df.to_csv('solution_summary.csv', sep='\t', encoding='utf-8')
+    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[-1]], plate_flux_temp_init, t_eval=tspan)
+    print(plate_flux_temp_solution.y)
+
+    sol_df = solution_to_df(plate_flux_temp_solution)
+    export_csv = sol_df.to_csv('plate_flux_and_temp_solution_summary.csv', sep='\t', encoding='utf-8')
 
     # solution_plots(sol_df)
