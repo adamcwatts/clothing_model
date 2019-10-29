@@ -1,17 +1,20 @@
+# currently modeling wool with parameters from Neves et al. 2015 paper
+
 TIME_INPUT_PARAMETERS = \
     {
         'start': 0,  # [time in seconds]
         'discrete time step': 0.1,  # [seconds]
-        'finish min': 1,  # [minutes]
+        'finish min': 15,  # [minutes]
     }
 
 FABRIC_INPUT_PARAMETERS = \
     {'regain': 0.15,  # [fraction from 0 to 1]
-     '% porosity of air in fabric': 0.931,  # [fraction from 0 to 1]
+     'porosity of air in fabric': 0.931,  # [fraction from 0 to 1]
      'dry fiber density': 1300,  # [kg/m^3]
      'fiber specific heat': 1360,  # [J/ Kg K ]
      'fabric thickness': 0.00857,  # [m]
-     'R_ef': 23.4  # [m^2 Pa / W]
+     'R_ef': 23.4,  # [m^2 Pa / W]
+     'thermal conductivity of fiber': 0.20  # [W /K m],
      }
 
 BOUNDARY_INPUT_PARAMETERS = \
@@ -28,6 +31,18 @@ FABRIC_IC_INPUT = \
         'initial clothing rh': 0.35,  # [fraction from 0 to 1]
     }  # assumes iso-humid and iso-thermo
 
+ODE_PHYSICS_INPUT = \
+    {
+        'membrane_air_length_equiv': 5.0e-3,  # [m]
+        # 5mm effective air layer thickness between outer textile and ambient air.
+        # water-vapor permeable membrane has an inherent vapor resistance that’s always there even during calibration
+        'length_still_air': 3.9 * 10 ** (-3),  # [m]
+        # 3.9mm effective air layer thickness between outer textile and ambient air
 
+        'eps_clothing': 0.95,
+        'sigma': 5.67 * 10 ** (-8),  # [w /m^2 K]
+        'h_convection': 7.75,  # [W/m^2 K]
+        # Heat transfer coefficient of air convection assuming boundary air-layer between outer clothing and environment
+    }
 TOLERANCE = 0
 NUMBER_OF_NODES = 21
