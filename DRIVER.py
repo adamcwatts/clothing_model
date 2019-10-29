@@ -126,49 +126,54 @@ def ode_plateflux_temp(t, y):
 
 
 def ode_concentration(t, c):
+    delta_x = df_fabric_initial_conditions['thickness [m]'].to_numpy()  # thickness of each node
+    D_WF = df_fabric_initial_conditions['diffusivity of water though fabric [m^2 /s]'].to_numpy()
+
+    delta_path = np.copy(delta_x)  # copy array to create actual path between nodes
+    delta_path[0] = delta_path[0] * 0.5 + OPI['membrane_air_length_equiv']  # node next to hot plate
+    delta_path[-1] = delta_path[-1] * 0.5 + OPI['length_still_air']
+
+    material = D_WF / delta_x
+
     concentration_array = np.concatenate(
         ([boundary_conditions['water concentration at plate [g/m^3]']], c,
          [boundary_conditions['water concentration in ambient air [g/m^3]']]), axis=0)
 
+    delta_c = np.diff(concentration_array) * -1
 
-def solution_to_df(ode_sol):
+    # dcdt_0 = material[0] * (delta_c[0] / (delta_x[0] * 0.5 + membrane_air_length_equiv) - delta_c[1] / delta_x[0])
+    # dcdt_1 = material[1] * (delta_c[1] / delta_x[1] - (delta_c[2]) / delta_x[1])
+    # dcdt_2 = material[2] * (delta_c[2] / delta_x[2] - delta_c[3] / (delta_x[2] * 0.5 + still_air_length))
+
+    dcdt = material * (delta_c[0:-1] / delta_path - delta_c[1:] / delta_path)
+
+    return dcdt
+
+
+def solution_to_df(ode_sol, solution_type):
     # takes ODE solution and creates data frame that's easy to read solutions off of
 
-    fabric_solutions = {f'Temp at Node {i + 1} [C]': ode_sol.y[i + 1] - 273.15 for i in range(node_count)}
-    fabric_solutions['Time (Minutes)'] = ode_sol.t / 60
-    fabric_solutions['Hot Plate Flux'] = ode_sol.y[0]
+    if solution_type == 't':
 
-    index_names = ode_sol.t
+        fabric_solutions = {f'Temp at Node {i + 1} [C]': ode_sol.y[i + 1] - 273.15 for i in range(node_count)}
+        fabric_solutions['Time (Minutes)'] = ode_sol.t / 60
+        fabric_solutions['Hot Plate Flux'] = ode_sol.y[0]
+
+    elif solution_type == 'c':
+        fabric_solutions = {f'Concentration at Node {i} [g/m^3]': ode_sol.y[i] for i in range(node_count)}
+
     index_names = np.ndarray.tolist(ode_sol.t)
     index_names = [str(name) + " [s]" for name in index_names]
 
     # reorder so time is at the beginning of the Data Frame
     sol_df = pd.DataFrame.from_dict(fabric_solutions)
-    sol_df = sol_df[sol_df.columns.tolist()[-2:] + sol_df.columns.tolist()[:-2]]  # reorder last 2 as first 2
+
+    if solution_type == 't':
+        sol_df = sol_df[sol_df.columns.tolist()[-2:] + sol_df.columns.tolist()[:-2]]  # reorder last 2 as first 2
+
     sol_df.index = index_names  # add index names
 
     return sol_df
-
-
-def solution_plots(solution_df):
-    middle_node = (node_count + 1) / 2
-
-    y_values = solution_df[f'Temp at Node {int(middle_node)} [C]'].to_numpy()
-    x_values = solution_df['Time (Minutes)'].to_numpy()
-
-    y_max = y_values.max()
-    y_min = y_values.min()
-
-    fig, ax = plt.subplots(ncols=1, figsize=(14, 7))
-
-    ax.set_ylim((y_min - 1, y_max + 1))
-    ax.set_xlim((0, x_values.max()))
-
-    ax.plot(x_values, y_values, label=f'Temperature at Node {middle_node} [C]')
-    ax.set_xlabel('Time [Minutes]')
-    ax.set_ylabel(r'Temperature $[\degreeC]$')
-    plt.savefig('Middle_Fabric_Node_Temp_C.pdf', bbox_inches="tight")
-    plt.show()
 
 
 if __name__ == '__main__':
@@ -238,13 +243,14 @@ if __name__ == '__main__':
 
     # attach 0 at the 0 position to add initial plate heat flux
     plate_flux_temp_init = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
-
     concentration_init = df_fabric_initial_conditions['water concentration in air [g/m^3]'].to_numpy()
 
-    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[-1]], plate_flux_temp_init, t_eval=tspan)
-    print(plate_flux_temp_solution.y)
+    concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[-1]], concentration_init, t_eval=tspan)
+    concentration_sol_df = solution_to_df(concentration_solution, 'c')
+    concentration_sol_df.to_csv('concentration_solution_summary.csv', sep='\t', encoding='utf-8')
 
-    sol_df = solution_to_df(plate_flux_temp_solution)
-    export_csv = sol_df.to_csv('plate_flux_and_temp_solution_summary.csv', sep='\t', encoding='utf-8')
+    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[-1]], plate_flux_temp_init, t_eval=tspan)
+    temperature_sol_df = solution_to_df(plate_flux_temp_solution, 't')
+    temperature_sol_df.to_csv('plate_flux_and_temp_solution_summary.csv', sep='\t', encoding='utf-8')
 
     # solution_plots(sol_df)
