@@ -18,7 +18,7 @@ def absorption(rh: 'array fraction') -> float:
     MAX_REGAIN = 2.6400
     try:
         number_of_elements = rh.shape[0]
-    except IndexError:
+    except (AttributeError, IndexError):
         number_of_elements = 1
         rh = np.array([rh])
 
@@ -104,7 +104,7 @@ def fabric_parameters(fabric_dictionary) -> 'updated fabric dictionary':
                                                      fabric_dictionary['R_ef'])  # TODO CHECK WHY 35?
     diffusivity_water_though_fabric = fabric_dictionary['fabric thickness'] / diffusion_resistance
 
-    fabric_dictionary['fabric_porosity'] = fabric_porosity
+    fabric_dictionary['fabric porosity'] = fabric_porosity
     fabric_dictionary['dry fabric density [kg/m^3]'] = p_fab_dry
     fabric_dictionary['dry fabric density [g/m^3]'] = p_fab_dry * 1000
     fabric_dictionary['fabric specific heat capacity [J/ Kg K]'] = fabric_specific_heat_capacity
@@ -286,6 +286,7 @@ def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Don
     absorption_factor = absorption(environmental_rh.values)
 
     gamma = (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor) / extracted_data.iloc[6]
+    #  (p_fab_dry*Regain*Absorption(Relative_Humidities)) / p_fab_dry
     # fractional density of water in fabric
 
     wet_fabric_properties['density fraction of water in fabric [kg/m^3]'] = gamma
