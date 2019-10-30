@@ -37,7 +37,8 @@ def fabric_initial_conditions_to_df(fabric_ic: 'temp and relative humidity',
     temp_dict['total fabric thickness [m]'] = temp_dict.pop('fabric thickness')
 
     fabric_water_concentration = fabric_data_dict['dry fiber density'] * fabric_data_dict[
-        'regain'] * functions.absorption(np.array(fabric_ic['initial clothing rh']))
+        'regain'] * functions.absorption(np.array(fabric_ic['initial clothing rh'])) * fabric_data_dict[
+                                     'fabric porosity']
 
     temp_dict['water concentration absorbed by fabric [kg/m^3]'] = fabric_water_concentration * multiplier
 
@@ -186,23 +187,24 @@ class SolutionSetup:
         zeros_array = np.zeros(node_tuple)
 
         self.temps = np.zeros(node_tuple)  # [kelvin]
-        self.raw_water_concentration = zeros_array  # [(g/m^3]  NEED TO VERIFY
-        self.condensation_concentration_history = zeros_array  # [(g/m^3]  NEED TO VERIFY
-        self.fiber_water_concentration_history = zeros_array  # [(g/m^3]  NEED TO VERIFY
+        self.raw_water_concentration = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.condensation_concentration_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.fiber_water_concentration_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.relative_humidity_history = np.copy(zeros_array)
 
-        self.enthalpy_sorption_history = zeros_array
+        self.enthalpy_sorption_history = np.copy(zeros_array)
 
         # could condense this into a 3D array time X nodes X type of heat flow
-        self.q_sorption = zeros_array
-        self.q_condensation = zeros_array
+        self.q_sorption = np.copy(zeros_array)
+        self.q_condensation = np.copy(zeros_array)
 
-        self.q_evaporation = zeros_array
-        self.q_evaporation_history = zeros_array
+        self.q_evaporation = np.copy(zeros_array)
+        self.q_evaporation_history = np.copy(zeros_array)
 
-        self.q_1_history = zeros_array
-        self.q_L_history = zeros_array
+        self.q_1_history = np.copy(zeros_array)
+        self.q_L_history = np.copy(zeros_array)
 
-        self.relative_humidity_post_absorption_history = zeros_array
+        self.relative_humidity_post_absorption_history = np.copy(zeros_array)
 
         # final_temps_and_concentration = zeros_array
 
@@ -222,6 +224,27 @@ class SolutionSetup:
         self.delta_path[-1] = self.delta_path[-1] * 0.5 + OPI['length_still_air']
 
         self.material_concentration_stiffness = self.D_WF / self.delta_x
+
+        # initialize first concentration found in fibers
+        self.fiber_water_concentration_history[0, :] = df_fabric_initial_conditions[
+            'water concentration absorbed by fabric [kg/m^3]']
+        self.relative_humidity_post_absorption_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
+        self.relative_humidity_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
+
+    def post_concentration(self, ode_concentration_solution, index):
+        current_concentration = ode_concentration_solution.y[:, -1]
+        self.fiber_water_concentration_history[index, :] = current_concentration
+
+        self.relative_humidity_history[index, :] = \
+            functions.relative_humidity_calc(current_concentration,
+                                             df_fabric_initial_conditions['initial clothing temp [K]'])
+
+        rh_sol = functions.rh_equilibrium(df_fabric_initial_conditions, current_concentration,
+                                          df_fabric_initial_conditions['initial clothing temp [K]'],
+                                          self.relative_humidity_history[0, :])
+
+        self.relative_humidity_post_absorption_history[index, :] = rh_sol
+
 
 
 if __name__ == '__main__':
@@ -246,7 +269,8 @@ if __name__ == '__main__':
     df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
                                               df_fabric_initial_conditions['initial clothing rh'])
 
-    ODE.concentration_constants(df_fabric_initial_conditions)  # precalculute constants for concentration ODE
+    ODE.concentration_constants(df_fabric_initial_conditions)  # pre-calculate constants for concentration ODE
+
     # TEST RH Equilibrium Function
 
     # temps_c = np.array([20, 30, 35, 40])
@@ -263,18 +287,21 @@ if __name__ == '__main__':
 
     # ODE STUFF BELOW
 
-    tspan = np.linspace(start, finish_seconds, finish_seconds + 1)
+    # tspan = np.linspace(start, finish_seconds, (finish_seconds/10) + 1)
 
     # attach 0 at the 0 position to add initial plate heat flux
     plate_flux_temp_init = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
     concentration_init = df_fabric_initial_conditions['water concentration in air [g/m^3]'].to_numpy()
 
-    concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[-1]], concentration_init, t_eval=tspan)
-    concentration_sol_df = solution_to_df(concentration_solution, 'c')
-    concentration_sol_df.to_csv('concentration_solution_summary.csv', sep='\t', encoding='utf-8')
+    concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[1]], concentration_init)
+    ODE.post_concentration(concentration_solution, 1)
 
-    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[-1]], plate_flux_temp_init, t_eval=tspan)
-    temperature_sol_df = solution_to_df(plate_flux_temp_solution, 't')
-    temperature_sol_df.to_csv('plate_flux_and_temp_solution_summary.csv', sep='\t', encoding='utf-8')
+    # concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[-1]], concentration_init, t_eval=tspan)
+    # concentration_sol_df = solution_to_df(concentration_solution, 'c')
+    # concentration_sol_df.to_csv('concentration_solution_summary.csv', sep='\t', encoding='utf-8')
+    #
+    # plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[-1]], plate_flux_temp_init, t_eval=tspan)
+    # temperature_sol_df = solution_to_df(plate_flux_temp_solution, 't')
+    # temperature_sol_df.to_csv('plate_flux_and_temp_solution_summary.csv', sep='\t', encoding='utf-8')
 
     # solution_plots(sol_df)
