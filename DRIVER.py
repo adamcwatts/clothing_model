@@ -6,6 +6,7 @@ from scipy.integrate import solve_ivp
 from time import time
 
 OPI = BC_IC.ODE_PHYSICS_INPUT
+H_VAPORIZATION = 2418  # J / g
 
 
 def convert_float_to_array(dictionary) -> 'dictionary with numpy array values':
@@ -21,7 +22,7 @@ def fabric_initial_conditions_to_df(fabric_ic: 'temp and relative humidity',
     temp_dict = {}
     for key, value in fabric_ic.items():
         # value = value[0]  # turns 1D array into scalar :TODO might not need this
-        multiplier = np.ones(ODE.node_count)  # multiplies values by node count
+        multiplier = np.ones(node_count)  # multiplies values by node count
 
         if key == 'initial clothing temp':
             temp_dict['initial clothing temp [C]'] = value * multiplier
@@ -49,7 +50,7 @@ def fabric_initial_conditions_to_df(fabric_ic: 'temp and relative humidity',
     temp_dict['thickness [m]'] = node_thickness
 
     df = pd.DataFrame.from_dict(temp_dict)
-    names = [f'Fabric Node {x}' for x in range(ODE.node_count)]
+    names = [f'Fabric Node {x}' for x in range(node_count)]
     df.index = names
     # df.rename(columns={'initial clothing rh': 'Initial clothing rh'}, inplace=True)
     return df
@@ -180,17 +181,28 @@ def solution_to_df(ode_sol, solution_type):
 
 
 class SolutionSetup:
-    def __init__(self):
+    def __init__(self, fabric_ic):
         self.node_count = BC_IC.NUMBER_OF_NODES
 
         node_tuple = (n, self.node_count)
         zeros_array = np.zeros(node_tuple)
 
         self.temps = np.zeros(node_tuple)  # [kelvin]
+        self.temps[0, :] = fabric_ic['initial clothing temp [K]'].to_numpy()
+
         self.raw_water_concentration = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
         self.condensation_concentration_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.sorption_history = np.copy(zeros_array)  # [g/m^3] :  water density absorbed or desorbed by fabric
+
         self.fiber_water_concentration_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.fiber_water_concentration_history[0, :] = df_fabric_initial_conditions[
+            'water concentration absorbed by fabric [kg/m^3]']
+
         self.relative_humidity_history = np.copy(zeros_array)
+        self.relative_humidity_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
+
+        self.relative_humidity_post_absorption_history = np.copy(zeros_array)
+        self.relative_humidity_post_absorption_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
 
         self.enthalpy_sorption_history = np.copy(zeros_array)
 
@@ -204,20 +216,17 @@ class SolutionSetup:
         self.q_1_history = np.copy(zeros_array)
         self.q_L_history = np.copy(zeros_array)
 
-        self.relative_humidity_post_absorption_history = np.copy(zeros_array)
-
-        # final_temps_and_concentration = zeros_array
-
         self.heat_flows_history = np.zeros((n, 1 + self.node_count))
 
         self.delta_x = None
+        self.delta_path = None
         self.D_WF = None
         self.material_concentration_stiffness = None
-        self.delta_path = None
 
-    def concentration_constants(self, fabric_initial_conditions_data_frame):
-        self.delta_x = fabric_initial_conditions_data_frame['thickness [m]'].to_numpy()  # thickness of each node
-        self.D_WF = fabric_initial_conditions_data_frame['diffusivity of water though fabric [m^2 /s]'].to_numpy()
+    def concentration_constants(self, fabric_ic):
+        # Constants for ODE concentration
+        self.delta_x = fabric_ic['thickness [m]'].to_numpy()  # thickness of each node
+        self.D_WF = fabric_ic['diffusivity of water though fabric [m^2 /s]'].to_numpy()
 
         self.delta_path = np.copy(self.delta_x)  # copy array to create actual path between nodes
         self.delta_path[0] = self.delta_path[0] * 0.5 + OPI['membrane_air_length_equiv']  # node next to hot plate
@@ -225,26 +234,55 @@ class SolutionSetup:
 
         self.material_concentration_stiffness = self.D_WF / self.delta_x
 
-        # initialize first concentration found in fibers
-        self.fiber_water_concentration_history[0, :] = df_fabric_initial_conditions[
-            'water concentration absorbed by fabric [kg/m^3]']
-        self.relative_humidity_post_absorption_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
-        self.relative_humidity_history[0, :] = df_fabric_initial_conditions['initial clothing rh']
-
     def post_concentration(self, ode_concentration_solution, index):
+        # under normal conditions where RH of air > RH fabric
+        # fiber sorption occurs, reduces ambient RH while absorption water, giving off heat
+        # else, inverse occurs
+
+        # if near 100% ambient RH, hard to tell if sorption occurs first then condensation or inverse
+
         current_concentration = ode_concentration_solution.y[:, -1]
-        self.fiber_water_concentration_history[index, :] = current_concentration
+        self.raw_water_concentration[index:, :] = ode_concentration_solution.y[:, -1]
 
         self.relative_humidity_history[index, :] = \
             functions.relative_humidity_calc(current_concentration,
                                              df_fabric_initial_conditions['initial clothing temp [K]'])
 
-        rh_sol = functions.rh_equilibrium(df_fabric_initial_conditions, current_concentration,
-                                          df_fabric_initial_conditions['initial clothing temp [K]'],
-                                          self.relative_humidity_history[0, :])
+        # Use Relative humidity equilibrium function
+        relative_humidity_equilibrium, sorption = functions.rh_equilibrium(
+            df_fabric_initial_conditions, current_concentration,
+            df_fabric_initial_conditions['initial clothing temp [K]'],
+            self.relative_humidity_history[0, :])
 
-        self.relative_humidity_post_absorption_history[index, :] = rh_sol
+        # Use condensation_checker to check for condensation
+        self.relative_humidity_post_absorption_history[index, :], \
+        self.fiber_water_concentration_history[index, :], \
+        self.condensation_concentration_history[index, :] = \
+            functions.condensation_checker(self.relative_humidity_history[index, :],
+                                           current_concentration, self.temps[index, :])
+        # sorption
+        self.sorption_history[index, :] = sorption
 
+    def post_ode_heat_flows(self, fabric_ic, index):
+        node_thickness = fabric_ic['thickness [m]'].to_numpy()
+
+        # heat of sorption due to regain in [J/g]
+        self.q_sorption[index, :] = functions.vectorized_h_sorp_cal(
+            self.relative_humidity_post_absorption_history[index - 1, :],
+            self.relative_humidity_post_absorption_history[index, :])
+
+        flux = self.sorption_history[index, :] * node_thickness / time_step
+
+        self.q_1_history[index, :] = flux * self.q_sorption[index, :]
+        self.q_L_history[index, :] = flux * H_VAPORIZATION
+        self.q_sorption[index, :] = self.q_1_history[index, :] + self.q_L_history[index, :]
+
+        self.q_condensation[index, :] = functions.q_condensation(self.condensation_concentration_history[index, :],
+                                                                 node_thickness, time_step)
+
+        self.q_evaporation[index, :], self.condensation_concentration_history[index, :] = functions.q_evaporation(
+            self.relative_humidity_post_absorption_history[index, :], self.condensation_concentration_history[index, :],
+            node_thickness, time_step)
 
 
 if __name__ == '__main__':
@@ -255,10 +293,10 @@ if __name__ == '__main__':
     tspan = np.arange(start, finish_seconds + time_step, time_step)
     n = tspan.shape[0]
 
-    ODE = SolutionSetup()  # initialize ODE arrays and key parameters
+    node_count = BC_IC.NUMBER_OF_NODES
 
     fabric_data = functions.fabric_parameters(BC_IC.FABRIC_INPUT_PARAMETERS)
-    fabric_node_dimensions = functions.fabric_1D_meshing(fabric_data, ODE.node_count)
+    fabric_node_dimensions = functions.fabric_1D_meshing(fabric_data, node_count)
 
     boundary_conditions = boundary_conditions_with_kelvin(BC_IC.BOUNDARY_INPUT_PARAMETERS)
     fix_floats_to_numpy_array = convert_float_to_array(BC_IC.FABRIC_IC_INPUT)
@@ -269,6 +307,7 @@ if __name__ == '__main__':
     df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
                                               df_fabric_initial_conditions['initial clothing rh'])
 
+    ODE = SolutionSetup(df_fabric_initial_conditions)  # initialize ODE arrays and key parameters
     ODE.concentration_constants(df_fabric_initial_conditions)  # pre-calculate constants for concentration ODE
 
     # TEST RH Equilibrium Function
@@ -295,6 +334,10 @@ if __name__ == '__main__':
 
     concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[1]], concentration_init)
     ODE.post_concentration(concentration_solution, 1)
+
+    # update fabric properties due to regain
+    df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
+                                              ODE.relative_humidity_post_absorption_history[1, :])
 
     # concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[-1]], concentration_init, t_eval=tspan)
     # concentration_sol_df = solution_to_df(concentration_solution, 'c')
