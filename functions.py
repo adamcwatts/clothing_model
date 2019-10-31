@@ -1,9 +1,8 @@
 import numpy as np
 import pandas as pd
-import scipy
 import MODEL_BC_IC
 import math
-import scipy
+import scipy.integrate as integrate
 from scipy.optimize import fsolve
 from time import time
 
@@ -74,6 +73,17 @@ def h_vap_calc(t_celsius: 'celsius', t_kelvin: 'Kelvin') -> 'Joules/gram':
     else:  # no celsius, use kelvin
         enthalpy_vapor = 0.001 * (2.792 * 10 ** 6 - 160 * t_kelvin - 3.43 * t_kelvin ** 2)
     return enthalpy_vapor
+
+
+def h_absorption(rh):
+    # Heat of absorption in J/g as a function of RH
+    return 195 * (1.0 - rh) * ((1.0 / (0.2 + rh)) + (1.0 / (1.05 - rh)))
+
+
+def h_sorp_calc(previous_rh, current_rh):
+    # total change in heat of Sorption where positive values implies giving off heat due to sorption while
+    # negative implies taking in heat (cooling) due to loosing bound water [J/g]
+    return integrate.quad(h_absorption, previous_rh, current_rh)[0]  # return value only, not error too
 
 
 def evap_res_to_diffusion_res(t_celsius: 'celsius', R_ef: 'm ^ 2 Pa / W') -> 's/m':
@@ -236,6 +246,7 @@ def sat_vapor_pressure_eq_less_0(t_celsius: 'celsius') -> 'kPa':
     return vapor_pressure
 
 
+# REDUNDANT
 def condensation_check(concentration: 'concentration in grams per m^3',
                        t_kelvin: 'Temperature in kelvin') -> 'array of concentration of  water condensate and vapor':
     node_count = concentration.shape[0]
@@ -254,7 +265,7 @@ def condensation_check(concentration: 'concentration in grams per m^3',
 
     concentration_water_vapor[inverse_mask] = concentration[inverse_mask]
 
-    return condensation_concentration, concentration_water_vapor
+    return concentration_water_vapor, condensation_concentration
 
 
 def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Dont use iloc use index name
@@ -319,8 +330,7 @@ def relative_humidity_calc(concentration: 'grams / m^3 H20 in air', temp_kelvin:
 
 def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20 in the air", temperature: 'Kelvin',
                    previous_rh: 'Fabrics previous RH state') -> \
-        'RH equilibrium between fabric and air due to sorption process':  # TODO ATM, not important
-
+        'RH equilibrium between fabric and air due to sorption process':
     def func_1(x):
         # change_in_concentration of water absorbed water by fabric due to change in RH
         return fabric_dataframe['dry fabric density [g/m^3]'].array[0] * \
@@ -336,9 +346,10 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20
     guess = np.ones(water_vapor_concentration.shape[0]) * previous_rh
     # guess = np.array([0.6])
     rh_solution = fsolve(func_3, guess, maxfev=25)
+    sorption = func_1(rh_solution)
 
     # print(rh_solution)
-    return rh_solution
+    return rh_solution, sorption
 
 
 def q_condensation(condensation: "array of condensation [g/m^3] ", fabric_thickness: ' in [m]',
@@ -377,32 +388,37 @@ def q_evaporation(rh: 'array of relative humidity in fraction', condensation: "a
     return q_evap, condensation
 
 
+def condensation_checker(rh_array: 'relative humidity array', concentration: 'concentration in grams per m^3',
+                         temp: 'temperature array in Kelvin') -> 'corrected RH array, updated concentration array,' \
+                                                                 ' condensation array':
+    rh_mask = rh_array > 1  # where RH > 1
+
+    saturated_vapor_concentration = concentration_calc(None, 1, temp[rh_mask])  # new vapor in air at RH 1
+    condensation = concentration[rh_mask] - saturated_vapor_concentration  # condensation (simulated - saturation)
+    concentration[rh_mask] = saturated_vapor_concentration  # updated air to saturation point
+    rh_array[rh_mask] = 1  # update RH to saturation point
+
+    return rh_array, concentration, condensation
+
+
 # Vectorization of functions
 vectorized_regain = np.vectorize(regain_function,
                                  otypes=[float])  # specifies output is float, works when given empty set
 vp_equation_greater_than_freezing = np.vectorize(sat_vapor_pressure_eq_greater_0, otypes=[float])
 vp_equation_less_than_freezing = np.vectorize(sat_vapor_pressure_eq_less_0, otypes=[float])
+vectorized_h_sorp_cal = np.vectorize(h_sorp_calc, otypes=[float])
 # rh_equilibrium = np.vectorize(rh_equilibrium, otypes=[float])
 # relative_humidity_calc = np.vectorize(relative_humidity_calc)
 
 if __name__ == '__main__':
     temps = np.array([20, 30, 50])
     temps_kelvin = temps + 273.15
-    rh = np.array([0.0, 0.5, 1.25])
+    rh_previous = np.array([0.0, 0, 0])
+    rh = np.array([0.0, 0.5, 1])
+    c = concentration_calc(temps, rh)
 
-    print(q_evaporation(np.array([0.5, 1, 1.25]), np.array([10, 10, 10]), np.array([0.001, 0.001, 0.001]), 0.01))
-    # print(fractional_spacing_generator(4, 2))
+    # print(condensation_checker(rh, c, temps_kelvin))
 
-    # a = np.linspace(-0.5, 1.5, 10)
-    # temps = np.linspace(10, 40, 4)
+    print(vectorized_h_sorp_cal(rh_previous, rh))
 
-    # print(np.subtract(absorption(a), absorption_nv(a)))
-
-    # print(concentration_calc(temp, a))
-    # print(concentration_calc.__annotations__)
-
-    # print(absorption(a * 2))
     # print(h_vap_calc.__annotations__)
-    element_fraction = fractional_spacing_generator(10,2)
-    print(element_fraction)
-    # print(fabric_1D_meshing(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS, MODEL_BC_IC.NUMBER_OF_NODES, element_fraction))
