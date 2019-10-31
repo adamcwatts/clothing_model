@@ -244,6 +244,7 @@ class SolutionSetup:
         current_concentration = ode_concentration_solution.y[:, -1]
         self.raw_water_concentration[index:, :] = ode_concentration_solution.y[:, -1]
 
+        # RH before any sorption of water in fabric
         self.relative_humidity_history[index, :] = \
             functions.relative_humidity_calc(current_concentration,
                                              df_fabric_initial_conditions['initial clothing temp [K]'])
@@ -254,17 +255,24 @@ class SolutionSetup:
             df_fabric_initial_conditions['initial clothing temp [K]'],
             self.relative_humidity_history[0, :])
 
-        # Use condensation_checker to check for condensation
+        # assumes sorption priority before condensation
+        self.relative_humidity_post_absorption_history[index, :] = relative_humidity_equilibrium
+
+        # Use condensation_checker to check for condensation using previous time steps temperatures
+
+        functions.condensation_class(self, index)
+
         self.relative_humidity_post_absorption_history[index, :], \
         self.fiber_water_concentration_history[index, :], \
         self.condensation_concentration_history[index, :] = \
             functions.condensation_checker(self.relative_humidity_history[index, :],
-                                           current_concentration, self.temps[index, :])
+                                           current_concentration, self.temps[index - 1, :],
+                                           self.condensation_concentration_history[index, :])
         # sorption
         self.sorption_history[index, :] = sorption
 
     def post_ode_heat_flows(self, fabric_ic, index):
-        node_thickness = fabric_ic['thickness [m]'].to_numpy()
+        node_thickness = self.delta_x
 
         # heat of sorption due to regain in [J/g]
         self.q_sorption[index, :] = functions.vectorized_h_sorp_cal(
@@ -334,6 +342,7 @@ if __name__ == '__main__':
 
     concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[1]], concentration_init)
     ODE.post_concentration(concentration_solution, 1)
+    ODE.post_ode_heat_flows(df_fabric_initial_conditions, 1)
 
     # update fabric properties due to regain
     df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
