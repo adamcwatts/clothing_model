@@ -294,7 +294,7 @@ def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Don
     number_of_nodes = fabric_df.shape[0]
     # wet_fabric_params = np.array((number_of_nodes, 6))
     extracted_data = fabric_df.iloc[0]
-    absorption_factor = absorption(environmental_rh.values)
+    absorption_factor = absorption(environmental_rh)
 
     gamma = (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor) / extracted_data.iloc[6]
     #  (p_fab_dry*Regain*Absorption(Relative_Humidities)) / p_fab_dry
@@ -346,7 +346,7 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20
     guess = np.ones(water_vapor_concentration.shape[0]) * previous_rh
     # guess = np.array([0.6])
     rh_solution = fsolve(func_3, guess, maxfev=25)
-    sorption = func_1(rh_solution)
+    sorption = func_1(rh_solution)  # grams / meter^3
 
     # print(rh_solution)
     return rh_solution, sorption
@@ -405,21 +405,26 @@ def condensation_checker(rh_array: 'relative humidity array', concentration: 'co
     return rh_array, concentration, condensation
 
 
-def condensation_class(ode_class, index) -> 'corrected RH array, updated concentration array':
-    rh_array = ode_class.relative_humidity_post_absorption_history[index, :]
-    concentration = ode_class.fiber_water_concentration_history[index, :]
-    condensation = ode_class.condensation_concentration_history[index, :]
-    temp = ode_class.temps[index - 1:]
-
-    rh_mask = rh_array > 1  # where RH > 1
-    # condensation = np.zeros(rh_array.shape[0])
-
-    if np.any(rh_mask):  # only run function if at least 1 node has RH > 1
-        saturated_vapor_concentration = concentration_calc(None, 1, temp)  # new vapor in air at RH 1
-        condensation[rh_mask] = concentration[rh_mask] - saturated_vapor_concentration[
-            rh_mask]  # condensation (simulated - saturation)
-        concentration[rh_mask] = saturated_vapor_concentration[rh_mask]  # updated air to saturation point
-        rh_array[rh_mask] = 1  # update RH to saturation point
+# def condensation_checker2(ode_class, index, params=None) -> 'corrected RH array, updated concentration array':
+#     try:
+#         rh_array = ode_class.relative_humidity_post_absorption_history[index, :]
+#         concentration = ode_class.fiber_water_concentration_history[index, :]
+#         condensation = ode_class.condensation_concentration_history[index, :]
+#         temp = ode_class.temps[index - 1:]
+#     except AttributeError:
+#         pass
+#
+#     rh_mask = rh_array > 1  # where RH > 1
+#     # condensation = np.zeros(rh_array.shape[0])
+#
+#     if np.any(rh_mask):  # only run function if at least 1 node has RH > 1
+#         saturated_vapor_concentration = concentration_calc(None, 1, temp)  # new vapor in air at RH 1
+#         condensation[rh_mask] = concentration[rh_mask] - saturated_vapor_concentration[
+#             rh_mask]  # condensation (simulated - saturation)
+#         concentration[rh_mask] = saturated_vapor_concentration[rh_mask]  # updated air to saturation point
+#         rh_array[rh_mask] = 1  # update RH to saturation point
+#
+#     return rh_array, concentration, condensation
 
 
 # Vectorization of functions
