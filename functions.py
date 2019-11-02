@@ -110,8 +110,10 @@ def fabric_parameters(fabric_dictionary) -> 'updated fabric dictionary':
     p_fab_dry = fabric_dictionary['dry fiber density'] * fabric_porosity  # [kg/m^3]
     fabric_specific_heat_capacity = (fabric_dictionary['fiber specific heat'] * fabric_porosity) + \
                                     (fabric_dictionary['porosity of air in fabric'] * AIR_SPECIFIC_HEAT_CAPACITY)
-    diffusion_resistance = evap_res_to_diffusion_res(MODEL_BC_IC.FABRIC_IC_INPUT['initial clothing temp'],
-                                                     fabric_dictionary['R_ef'])  # TODO CHECK WHY 35?
+
+    # Diffusion Resistance based off isothermal temperature setup at 35C
+    diffusion_resistance = evap_res_to_diffusion_res(MODEL_BC_IC.BOUNDARY_INPUT_PARAMETERS['plate temp'],
+                                                     fabric_dictionary['R_ef'])
     diffusivity_water_though_fabric = fabric_dictionary['fabric thickness'] / diffusion_resistance
 
     fabric_dictionary['fabric porosity'] = fabric_porosity
@@ -346,10 +348,12 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20
     guess = np.ones(water_vapor_concentration.shape[0]) * previous_rh
     # guess = np.array([0.6])
     rh_solution = fsolve(func_3, guess, maxfev=25)
-    sorption = func_1(rh_solution)  # grams / meter^3
+
+    sorption = func_1(rh_solution)  # [grams / meter^3]
+    equilibrium_air_concentration = concentration_calc(None, rh_solution, temperature) # [grams / meter^3]
 
     # print(rh_solution)
-    return rh_solution, sorption
+    return rh_solution, sorption, equilibrium_air_concentration
 
 
 def q_condensation(condensation: "array of condensation [g/m^3] ", fabric_thickness: ' in [m]',
@@ -443,7 +447,7 @@ if __name__ == '__main__':
     rh = np.array([0.0, 0.5, 1.2])
     c = concentration_calc(temps, rh)
 
-    print(condensation_checker(rh, c, temps_kelvin))
+    # print(condensation_checker(rh, c, temps_kelvin))
 
     # print(vectorized_h_sorp_cal(rh_previous, rh))
 
