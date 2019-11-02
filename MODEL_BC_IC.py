@@ -1,10 +1,11 @@
 # currently modeling wool with parameters from Neves et al. 2015 paper
-
+# Default values for ODE.IVP are 1e-3 for rtol and 1e-6 for atol which are too small (sinusoidal behavior).
+# Proposed tolerances are rtol=1e-5, atol=1e-7
 TIME_INPUT_PARAMETERS = \
     {
         'start': 0,  # [time in seconds]
         'discrete time step': 0.1,  # [seconds]
-        'finish min': 15,  # [minutes]
+        'finish min': 10,  # [minutes]
     }
 
 FABRIC_INPUT_PARAMETERS = \
@@ -44,5 +45,8 @@ ODE_PHYSICS_INPUT = \
         'h_convection': 7.75,  # [W/m^2 K]
         # Heat transfer coefficient of air convection assuming boundary air-layer between outer clothing and environment
     }
-TOLERANCE = 0
+# TOLERANCE = 0
+RELATIVE_TOLERANCE = 1E-5
+ABSOLUTE_TOLERANCE = 1E-7
 NUMBER_OF_NODES = 21
+
