@@ -3,10 +3,11 @@ import MODEL_BC_IC as BC_IC  # BC_IC - Boundary and Initial Conditions
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
-from time import time
 
 OPI = BC_IC.ODE_PHYSICS_INPUT
 H_VAPORIZATION = 2418  # J / g
+ATOL = BC_IC.ABSOLUTE_TOLERANCE  # import Absolute Tolerance for ODE solver
+RTOL = BC_IC.RELATIVE_TOLERANCE  # import Relative Tolerance for ODE solver
 
 
 def convert_float_to_array(dictionary) -> 'dictionary with numpy array values':
@@ -111,7 +112,7 @@ def ode_plateflux_temp(t, y):
     q_gen = (boundary_conditions['plate temp [K]'] - y[1]) * (K[0] / (ODE.delta_x[0] * 0.5))  # flux at plate ODE
     heat_flows = ODE.q_evap_history[idx, :] + ODE.q_conden_history[idx, :] + ODE.q_sorp_history[idx, :]
 
-    clothing_dydt = material * (np.diff(q_dry) * -1 + heat_flows)
+    clothing_dydt = material * (np.diff(q_dry) * -1 + 0)
     # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
 
     dydt = np.concatenate(([q_gen], clothing_dydt), axis=0)
@@ -155,6 +156,10 @@ def ode_concentration(t, c):
 
 
 def solution_to_df(ode_class):
+    ode_class.temp_c_history = ode_class.temp_k_history - 273.15  # append a C array
+    ode_class.rh_history *= 100  # convert fractions to  %
+    ode_class.rh_post_absorption_history *= 100  # convert fractions to  %
+
     # takes ODE solution and creates data frame that's easy to read solutions off of
 
     all_keys = ode_class.__dict__.keys()
@@ -163,8 +168,10 @@ def solution_to_df(ode_class):
     cleaned_key = [key.replace("_", ' ') for key in stripped_keys if 'q' not in key]  # replace underscore but no q
     cleaned_key.extend(key for key in stripped_keys if 'q' in key)  # extend with q while keeping underscore
 
-    unit_dict = {'concen': '[g/m^3]', 'temp': '[K]', 'q': '[W/m^2]', 'enthalpy': '[J/g]', 'heat': '[w/m^2]',
-                 'fabric': '[g/m^3]', 'rh': '[%]'}
+    unit_dict = {
+        'concen': '[g/m^3]', 'temp k': '[K]', 'temp c': '[C]', 'q': '[W/m^2]', 'enthalpy': '[J/g]',
+        'heat': '[w/m^2]', 'fabric': '[g/m^3]', 'rh': '[%]'
+    }
     index_names = [f'{round(k, 3)} [s]' for k in tspan]
     column_names = []  # nested list of column names for each dataframe to export
 
@@ -173,24 +180,53 @@ def solution_to_df(ode_class):
             if sub_key in key:
                 # print(key, unit_dict[sub_key])
 
-                names = [f'{key} at Node {h} {unit_dict[sub_key]}' for h in range(0, node_count)]
+                names = [f'{key.title()} at Node {h} {unit_dict[sub_key]}' for h in range(0, node_count)]
                 names.insert(0, 'Time [minutes]')
                 column_names.append(names)
+    print('\n')
 
     for k, item in enumerate(export_keys):
-        print(k, f'Exporting {item} CSV file')
+        print(f'{k}:', f'Exporting {item}.csv file')
         # add column of minutes at the beginning of each data array
         my_data = np.concatenate((np.round(tspan[:, None], decimals=3) / 60, getattr(ode_class, item)), axis=1)
         df = pd.DataFrame(data=my_data, columns=column_names[k], index=index_names)
 
         file_path = './SOLUTION_CSV/' + f'{item}.csv'
         df.to_csv(file_path, encoding='utf-8')
-        # fabric_solutions = {f'Temp at Node {i + 1} [C]': ode_sol.y[i + 1] - 273.15 for i in range(ODE.node_count)}
-        # fabric_solutions['Time (Minutes)'] = ode_sol.t / 60
-        # fabric_solutions['Hot Plate Flux'] = ode_sol.y[0]
+
+    display_messages(2)
+    # fabric_solutions = {f'Temp at Node {i + 1} [C]': ode_sol.y[i + 1] - 273.15 for i in range(ODE.node_count)}
+    # fabric_solutions['Time (Minutes)'] = ode_sol.t / 60
+    # fabric_solutions['Hot Plate Flux'] = ode_sol.y[0]
 
 
-pass
+def display_messages(case):
+    if case == 1:
+        print('\n****************************** CODE STARTING  *******************************')
+    elif case == 2:
+        print('\n****************************** CODE COMPLETED  *******************************')
+
+
+def print_progressbar(iteration, total, prefix='', suffix='', decimals=1, length=100, fill='█', print_end="\r"):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+        printEnd    - Optional  : end character (e.g. "\r", "\r\n") (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filledLength = int(length * iteration // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end=print_end)
+    # Print New Line on Complete
+    if iteration == total:
+        print()
 
 
 class SolutionSetup:
@@ -200,8 +236,9 @@ class SolutionSetup:
         node_tuple = (allocated_size, self.node_count)
         zeros_array = np.zeros(node_tuple)
 
-        self.temp_history = np.zeros(node_tuple)  # [kelvin]
-        self.temp_history[0, :] = fabric_ic['initial clothing temp [K]'].to_numpy()
+        self.temp_k_history = np.zeros(node_tuple)  # [Kelvin]
+        self.temp_c_history = np.zeros(node_tuple)  # [Celsius]
+        self.temp_k_history[0, :] = fabric_ic['initial clothing temp [K]'].to_numpy()
 
         self.raw_water_concentration = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
         self.conden_concen_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
@@ -263,7 +300,7 @@ class SolutionSetup:
         # Use Relative humidity equilibrium function
         relative_humidity_equilibrium, sorption = functions.rh_equilibrium(df_fabric_initial_conditions,
                                                                            current_concentration,
-                                                                           self.temp_history[index - 1, :],
+                                                                           self.temp_k_history[index - 1, :],
                                                                            self.rh_post_absorption_history[index - 1,
                                                                            :])
 
@@ -273,7 +310,7 @@ class SolutionSetup:
         # Use condensation_checker to check for condensation using previous time steps temperatures
 
         passing_parameters = (self.rh_post_absorption_history[index, :],
-                              current_concentration, self.temp_history[index - 1, :],
+                              current_concentration, self.temp_k_history[index - 1, :],
                               self.conden_concen_history[index, :])
 
         self.rh_post_absorption_history[index, :], \
@@ -310,7 +347,7 @@ class SolutionSetup:
 
     def post_plateflux_temp(self, ode_temp_solution, index):
         current_temperature = ode_temp_solution.y[1:, -1]
-        self.temp_history[index, :] = current_temperature
+        self.temp_k_history[index, :] = current_temperature
 
         self.heat_flows[index, 0] = ode_temp_solution.y[0, -1]
 
@@ -341,32 +378,17 @@ if __name__ == '__main__':
     ODE = SolutionSetup(df_fabric_initial_conditions, n)  # initialize ODE arrays and key parameters
     ODE.concentration_constants(df_fabric_initial_conditions)  # pre-calculate constants for concentration ODE
 
-    # TEST RH Equilibrium Function
-
-    # temps_c = np.array([20, 30, 35, 40])
-    # temps_k = temps_c + 273.15
-    #
-    # incoming_air_rh = np.array([1, 1, 1, 1]) * 0.75
-    # prior_rh = np.array([1, 1, 1, 1]) * 0.25
-    #
-    # concent_grams = functions.concentration_calc(temps_c, incoming_air_rh)
-    #
-    # sol_temp = functions.rh_equilibrium(df_fabric_initial_conditions, concent_grams, temps_k, prior_rh)
-    # print(sol_temp)
-    # print(functions.rh_equilibrium.__annotations__)
-
     # ODE STUFF BELOW
-
-    # tspan = np.linspace(start, finish_seconds, (finish_seconds/10) + 1)
-
-    # attach 0 at the 0 position to add initial plate heat flux
     plate_flux_temp_init = np.insert(df_fabric_initial_conditions['initial clothing temp [K]'].to_numpy(), 0, 0)
     concentration_init = df_fabric_initial_conditions['water concentration in air [g/m^3]'].to_numpy()
 
     idx = 1
-
+    end_value = tspan.shape[0] - 1
+    display_messages(1)
+    print_progressbar(0, end_value, prefix='Progress', suffix='Complete', length=50)
     # start concentration ODE
-    concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[idx]], concentration_init)
+    concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[idx]], concentration_init, rtol=RTOL,
+                                       atol=ATOL)
     ODE.post_concentration(concentration_solution, idx)
     ODE.post_concentration_sorption_flows(df_fabric_initial_conditions, idx)
 
@@ -374,21 +396,27 @@ if __name__ == '__main__':
     df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions, ODE.rh_post_absorption_history[1, :])
 
     # start temp/flux ODE
-    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[idx]], plate_flux_temp_init)
+    plate_flux_temp_solution = solve_ivp(ode_plateflux_temp, [tspan[0], tspan[idx]], plate_flux_temp_init, rtol=RTOL,
+                                         atol=ATOL)
     ODE.post_plateflux_temp(plate_flux_temp_solution, idx)
 
-    for i in range(1, tspan.shape[0] - 1):
-        c_sol = solve_ivp(ode_concentration, [tspan[i], tspan[i + 1]], ODE.fiber_water_concen_history[i, :])
+    for i in range(1, end_value):
+        # display_messages(3)
+        print_progressbar(i, end_value, prefix='Progress', suffix='Complete', length=50)
+
+        c_sol = solve_ivp(ode_concentration, [tspan[i], tspan[i + 1]], ODE.fiber_water_concen_history[i, :], rtol=RTOL,
+                          atol=ATOL)
         ODE.post_concentration(c_sol, i + 1)
         ODE.post_concentration_sorption_flows(c_sol, i + 1)
 
         df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions, ODE.rh_post_absorption_history[i, :])
 
-        new_ic = np.insert(ODE.temp_history[i, :], 0, ODE.heat_flows[i, 0])
-        t_sol = solve_ivp(ode_plateflux_temp, [tspan[i], tspan[i + 1]], new_ic)
+        new_ic = np.insert(ODE.temp_k_history[i, :], 0, ODE.heat_flows[i, 0])
+        t_sol = solve_ivp(ode_plateflux_temp, [tspan[i], tspan[i + 1]], new_ic, rtol=RTOL, atol=ATOL)
         ODE.post_plateflux_temp(t_sol, i + 1)
 
     solution_to_df(ODE)
+
     # concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[-1]], concentration_init, t_eval=tspan)
     # concentration_sol_df = solution_to_df(concentration_solution, 'c')
     # concentration_sol_df.to_csv('concentration_solution_summary.csv', sep='\t', encoding='utf-8')
