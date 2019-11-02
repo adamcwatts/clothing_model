@@ -99,8 +99,9 @@ def ode_plateflux_temp(t, y):
     C = df_wet_fabric['wet fabric specific heat [J/kg K]'].to_numpy()
     P = df_wet_fabric['wet fabric density [kg/m^3]'].to_numpy()
     U = K / ODE.delta_x
-    U[-1] = 1 / (r_rad_convect + 0.5 * (
-            ODE.delta_x[-1] / K[-1]))  # corrects last element for radiation, convection heat loss
+
+    # corrects last element for radiation, convection heat loss
+    U[-1] = 1 / (r_rad_convect + 0.5 * (ODE.delta_x[-1] / K[-1]))
 
     material = 1 / (ODE.delta_x * np.multiply(C, P))
 
@@ -112,6 +113,7 @@ def ode_plateflux_temp(t, y):
     q_gen = (boundary_conditions['plate temp [K]'] - y[1]) * (K[0] / (ODE.delta_x[0] * 0.5))  # flux at plate ODE
     heat_flows = ODE.q_evap_history[idx, :] + ODE.q_conden_history[idx, :] + ODE.q_sorp_history[idx, :]
 
+    # TEMPORARY NO OTHER HEAT FLOWS COUPLED TO TEST
     clothing_dydt = material * (np.diff(q_dry) * -1 + 0)
     # -1 due to diff goes a[i+1] - a[i], I need a[i] - a[i+1]
 
@@ -150,7 +152,8 @@ def ode_concentration(t, c):
     # dcdt_1 = material[1] * (delta_c[1] / delta_x[1] - (delta_c[2]) / delta_x[1])
     # dcdt_2 = material[2] * (delta_c[2] / delta_x[2] - delta_c[3] / (delta_x[2] * 0.5 + still_air_length))
 
-    dcdt = ODE.material_concentration_stiffness * (delta_c[0:-1] / ODE.delta_path - delta_c[1:] / ODE.delta_path)
+    dcdt = ODE.material_concentration_stiffness * \
+           (delta_c[0:-1] / ODE.delta_path[0:-1] - delta_c[1:] / ODE.delta_path[1:])
 
     return dcdt
 
@@ -240,7 +243,12 @@ class SolutionSetup:
         self.temp_c_history = np.zeros(node_tuple)  # [Celsius]
         self.temp_k_history[0, :] = fabric_ic['initial clothing temp [K]'].to_numpy()
 
-        self.raw_water_concentration = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
+        self.raw_water_concentration = np.copy(zeros_array)  # [g/m^3]
+        self.raw_water_concentration[0, :] = df_fabric_initial_conditions['water concentration in air [g/m^3]']
+
+        self.water_vapor_concentration = np.copy(zeros_array)  # [g/m^3]
+        self.water_vapor_concentration[0, :] = df_fabric_initial_conditions['water concentration in air [g/m^3]']
+
         self.conden_concen_history = np.copy(zeros_array)  # [(g/m^3]  NEED TO VERIFY
         self.fabric_sorption_history = np.copy(zeros_array)  # [g/m^3] :  water density absorbed or desorbed by fabric
 
@@ -278,7 +286,7 @@ class SolutionSetup:
 
         self.delta_path = np.copy(self.delta_x)  # copy array to create actual path between nodes
         self.delta_path[0] = self.delta_path[0] * 0.5 + OPI['membrane_air_length_equiv']  # node next to hot plate
-        self.delta_path[-1] = self.delta_path[-1] * 0.5 + OPI['length_still_air']
+        self.delta_path = np.append(self.delta_path, self.delta_path[-1] * 0.5 + OPI['length_still_air'])
 
         self.material_concentration_stiffness = self.D_WF / self.delta_x
 
@@ -298,30 +306,32 @@ class SolutionSetup:
                                              df_fabric_initial_conditions['initial clothing temp [K]'])
 
         # Use Relative humidity equilibrium function
-        relative_humidity_equilibrium, sorption = functions.rh_equilibrium(df_fabric_initial_conditions,
-                                                                           current_concentration,
-                                                                           self.temp_k_history[index - 1, :],
-                                                                           self.rh_post_absorption_history[index - 1,
-                                                                           :])
+        passing_parameters = (df_fabric_initial_conditions, current_concentration, self.temp_k_history[index - 1, :],
+                              self.rh_post_absorption_history[index - 1, :])
+
+        relative_humidity_equilibrium, sorption, eq_air_concentration = functions.rh_equilibrium(*passing_parameters)
 
         # assumes sorption priority before condensation
         self.rh_post_absorption_history[index, :] = relative_humidity_equilibrium
 
+        # sorption
+        self.fabric_sorption_history[index, :] = sorption
+
+        # equilibrium air concentration due to equilibrium
+        self.water_vapor_concentration[index, :] = eq_air_concentration
+
         # Use condensation_checker to check for condensation using previous time steps temperatures
 
         passing_parameters = (self.rh_post_absorption_history[index, :],
-                              current_concentration, self.temp_k_history[index - 1, :],
+                              self.water_vapor_concentration[index, :], self.temp_k_history[index - 1, :],
                               self.conden_concen_history[index, :])
 
         self.rh_post_absorption_history[index, :], \
-        self.fiber_water_concen_history[index, :], \
+        self.water_vapor_concentration[index, :], \
         self.conden_concen_history[index, :] = \
             functions.condensation_checker(*passing_parameters)
 
         # functions.condensation_checker(self, index)
-
-        # sorption
-        self.fabric_sorption_history[index, :] = sorption
 
     def post_concentration_sorption_flows(self, fabric_ic, index):
         node_thickness = self.delta_x
@@ -386,6 +396,7 @@ if __name__ == '__main__':
     end_value = tspan.shape[0] - 1
     display_messages(1)
     print_progressbar(0, end_value, prefix='Progress', suffix='Complete', length=50)
+
     # start concentration ODE
     concentration_solution = solve_ivp(ode_concentration, [tspan[0], tspan[idx]], concentration_init, rtol=RTOL,
                                        atol=ATOL)
@@ -404,7 +415,7 @@ if __name__ == '__main__':
         # display_messages(3)
         print_progressbar(i, end_value, prefix='Progress', suffix='Complete', length=50)
 
-        c_sol = solve_ivp(ode_concentration, [tspan[i], tspan[i + 1]], ODE.fiber_water_concen_history[i, :], rtol=RTOL,
+        c_sol = solve_ivp(ode_concentration, [tspan[i], tspan[i + 1]], ODE.water_vapor_concentration[i, :], rtol=RTOL,
                           atol=ATOL)
         ODE.post_concentration(c_sol, i + 1)
         ODE.post_concentration_sorption_flows(c_sol, i + 1)
