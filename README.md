@@ -4,5 +4,5 @@
 3. MODEL_BC_IC.py script holds all the boundary and initial conditions needed to run the scripts. Also holds material parameters and physics parameters governing the system
 
 #### Example Solution 
-![SegmentLocal](VIDEOS/time_time.gif "Temperature_Location_solution")
+![SegmentLocal](VIDEOS/temp_time.gif "Temperature_Location_solution")
 
