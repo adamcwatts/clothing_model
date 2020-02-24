@@ -83,6 +83,8 @@ def h_absorption(rh):
 def h_sorp_calc(previous_rh, current_rh):
     # total change in heat of Sorption where positive values implies giving off heat due to sorption while
     # negative implies taking in heat (cooling) due to loosing bound water [J/g]
+
+    #TODO CHECK accuracy for Quad vs trapz integrate
     return integrate.quad(h_absorption, previous_rh, current_rh)[0]  # return value only, not error too
 
 
@@ -120,13 +122,14 @@ def fabric_parameters(fabric_dictionary) -> 'updated fabric dictionary':
     fabric_dictionary['dry fabric density [kg/m^3]'] = p_fab_dry
     fabric_dictionary['dry fabric density [g/m^3]'] = p_fab_dry * 1000
     fabric_dictionary['fabric specific heat capacity [J/ Kg K]'] = fabric_specific_heat_capacity
+    fabric_dictionary['diffusion resistance through fabric [s/m]'] = diffusion_resistance
     fabric_dictionary['diffusivity of water though fabric [m^2 /s]'] = diffusivity_water_though_fabric
 
     return fabric_dictionary
 
 
-def fabric_1D_meshing(fabric_dictionary, number_of_nodes,
-                      fraction_spacing_of_elements=None) -> 'turns fabric_dictionary into fabric pd data frame':
+def fabric_1D_meshing_old(fabric_dictionary, number_of_nodes,
+                          fraction_spacing_of_elements=None) -> 'turns fabric_dictionary into fabric pd data frame':
     # Generates 1D element from inputs, such as thickness of fabric and the spacing of the finite elements
     # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
     # 2) Number of elements: How many times to split up fabric e.g. 1mm fabric where 3=number of elements, 1/3mm element
@@ -160,6 +163,27 @@ def fabric_1D_meshing(fabric_dictionary, number_of_nodes,
     # fabric_df = pd.DataFrame(data)  # dictionary to pandas data frame structure
     # fabric_df.index = node_names
     # return fabric_df
+
+    return node_length
+
+
+def node_generator(fabric_dictionary, number_of_nodes):
+    # Generates 1D nodes from inputs, such as thickness of fabric and number of nodes desired
+    # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
+    # 2) Number of elements: How many times to split up fabric
+    #  e.g. 10mm fabric where 5=number of elements, 1.125; 2.5; 2.5; 2.5; 1.125 element thickness
+    #   (data type- double, 1x1 array)
+
+    L = fabric_dictionary['fabric thickness']
+    num_interior_nodes, num_exterior_nodes = number_of_nodes - 1, 2
+    # 2 exterior end nodes equal 1 entire node
+
+    size_interior_nodes = L / num_interior_nodes  # calculate interior element thickness
+    size_exterior_nodes = size_interior_nodes / 2
+
+    node_length = np.empty(number_of_nodes)  # create empty array
+    node_length.fill(size_interior_nodes)  # fill entire array with interior node thickness
+    node_length[0], node_length[-1] = size_exterior_nodes, size_exterior_nodes  # correct exterior nodes which are half
 
     return node_length
 
@@ -284,6 +308,7 @@ def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Don
 
     wet_fabric_properties = {}
 
+    # TODO ALL 3 CONSTANTS ARE CONSTANTLY CALLED EACH ITERATION, COULD BE MOVED OUTSIDE AS GLOBAL VARIABLES
     WATER_SPECIFIC_HEAT_CAPACITY = 4179  # [J / (kg K)]
     # T. Bergman and A. Lavine, Fundamentals of Heat and Mass Transfer, 8th ed. Wiley.
 
@@ -314,6 +339,9 @@ def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Don
 
     wet_fabric_thermal_conductivity = FABRIC_THERMAL_CONDUCTIVITY * (1 - gamma) + gamma * THERMAL_CONDUCTIVITY_WATER
     wet_fabric_properties['wet fabric thermal conductivity [W/mk]'] = wet_fabric_thermal_conductivity
+
+    wet_fabric_properties['Thermal Diffusivity [m^2/s]'] = wet_fabric_thermal_conductivity / (
+                wet_fabric_density * wet_fabric_specific_heat)
 
     wet_fabric = pd.DataFrame.from_dict(wet_fabric_properties)
     wet_fabric.index = fabric_df.index
@@ -350,7 +378,7 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20
     rh_solution = fsolve(func_3, guess, maxfev=25)
 
     sorption = func_1(rh_solution)  # [grams / meter^3]
-    equilibrium_air_concentration = concentration_calc(None, rh_solution, temperature) # [grams / meter^3]
+    equilibrium_air_concentration = concentration_calc(None, rh_solution, temperature)  # [grams / meter^3]
 
     # print(rh_solution)
     return rh_solution, sorption, equilibrium_air_concentration
@@ -386,8 +414,9 @@ def q_evaporation(rh: 'array of relative humidity in fraction', condensation: "a
 
     evap_mask = np.where((rh < 1.0) & (condensation > 0))
 
-    q_evap[evap_mask] = condensation[evap_mask] * H_VAPORIZATION * fabric_thickness[evap_mask] / time_step
-    condensation[evap_mask] = 0
+    if any(map(len, evap_mask)):
+        q_evap[evap_mask] = condensation[evap_mask] * H_VAPORIZATION * fabric_thickness[evap_mask] / time_step
+        condensation[evap_mask] = 0
 
     return q_evap, condensation
 
@@ -407,6 +436,12 @@ def condensation_checker(rh_array: 'relative humidity array', concentration: 'co
         rh_array[rh_mask] = 1  # update RH to saturation point
 
     return rh_array, concentration, condensation
+
+
+def dt_generator(min_dt):
+    base = math.ceil(math.fabs(math.log10(min_dt)))
+    # new_dt = math.floor(min_dt*10**base) / 10**base
+    return 10 ** (-base)
 
 
 # def condensation_checker2(ode_class, index, params=None) -> 'corrected RH array, updated concentration array':

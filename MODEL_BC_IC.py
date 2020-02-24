@@ -4,8 +4,7 @@
 TIME_INPUT_PARAMETERS = \
     {
         'start': 0,  # [time in seconds]
-        'discrete time step': 0.1,  # [seconds]
-        'finish min': 10,  # [minutes]
+        'finish min': 30.0,  # [minutes]
     }
 
 FABRIC_INPUT_PARAMETERS = \
@@ -13,17 +12,18 @@ FABRIC_INPUT_PARAMETERS = \
      'porosity of air in fabric': 0.931,  # [fraction from 0 to 1]
      'dry fiber density': 1300,  # [kg/m^3]
      'fiber specific heat': 1360,  # [J/ Kg K ]
-     'fabric thickness': 0.00857,  # [m]
+     # 'fabric thickness': 0.00857,  # [m]
+     'fabric thickness': 0.01,  # [m]
      'R_ef': 23.4,  # [m^2 Pa / W]
      'thermal conductivity of fiber': 0.20  # [W /K m],
      }
 
 BOUNDARY_INPUT_PARAMETERS = \
     {
-        'air temp': 35,  # [Celsius]
-        'plate temp': 35,  # [Celsius]
+        'air temp': 35.0,  # [Celsius]
+        'plate temp': 35.0,  # [Celsius]
         'air rh': 0.4,  # [fraction from 0 to 1]
-        'plate rh': 1,  # [fraction from 0 to 1]
+        'plate rh': 1.0,  # [fraction from 0 to 1]
     }
 
 FABRIC_IC_INPUT = \
@@ -32,12 +32,12 @@ FABRIC_IC_INPUT = \
         'initial clothing rh': 0.35,  # [fraction from 0 to 1]
     }  # assumes iso-humid and iso-thermo
 
-ODE_PHYSICS_INPUT = \
+PDE_PHYSICS_INPUT = \
     {
-        'membrane_air_length_equiv': 5.0e-3,  # [m]
-        # 5mm effective air layer thickness between outer textile and ambient air.
+        'membrane_air_length_equiv': 5.0E-3,  # [m]
+        # 5mm effective air layer thickness between plate and textile at plate.
         # water-vapor permeable membrane has an inherent vapor resistance that’s always there even during calibration
-        'length_still_air': 3.9 * 10 ** (-3),  # [m]
+        'length_still_air': 3.9E-3,  # [m]
         # 3.9mm effective air layer thickness between outer textile and ambient air
 
         'eps_clothing': 0.95,
@@ -46,7 +46,7 @@ ODE_PHYSICS_INPUT = \
         # Heat transfer coefficient of air convection assuming boundary air-layer between outer clothing and environment
     }
 # TOLERANCE = 0
-RELATIVE_TOLERANCE = 1E-5
-ABSOLUTE_TOLERANCE = 1E-7
-NUMBER_OF_NODES = 21
+# RELATIVE_TOLERANCE = 1E-5
+# ABSOLUTE_TOLERANCE = 1E-7
+NUMBER_OF_NODES = 30
 
