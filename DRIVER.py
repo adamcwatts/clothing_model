@@ -7,7 +7,7 @@ from scipy.optimize import fsolve
 from scipy.integrate import solve_ivp
 
 PI = BC_IC.PDE_PHYSICS_INPUT
-H_VAPORIZATION = 2418  # J / g
+H_VAPORIZATION = PI['H_VAPORIZATION [J/g]']
 
 
 def boundary_conditions_with_kelvin(boundary_condition):
@@ -287,8 +287,10 @@ class SolutionSetup:
                      'RH [-]': self.materials.FABRIC['fabric: initial RH [-]'] * multiplier,
                      }
         fabric_TD['diffusion resistance [s/m]'] = self.materials.FABRIC['fabric: diffusion resistance [s/m]'] * multiplier
-        fabric_TD['Regain Factor: Instantaneous [-]'] = functions.regain_instant(epsilon_water, epsilon_water,
-                                                                      rho_water, rho_fiber) * multiplier
+        fabric_TD['Regain Factor: Instantaneous [-]'] = functions.regain_instant(epsilon_water,
+                                                                                 epsilon_water,
+                                                                                 rho_water,
+                                                                                 rho_fiber) * multiplier
 
         fabric_DF = pd.DataFrame.from_dict(fabric_TD)
         names = [f'Fabric Node {x}' for x in range(self.node_count)]

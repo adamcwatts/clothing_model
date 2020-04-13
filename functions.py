@@ -7,8 +7,8 @@ from scipy.optimize import fsolve
 import matplotlib.pyplot as plt
 from time import time
 
-MOLECULAR_WEIGHT_H2O = 18.01528  # [g / mol]
-H_VAPORIZATION = 2418  # J / g
+MOLECULAR_WEIGHT_H2O = MODEL_BC_IC.WATER_INPUT_PARAMETERS['water: molecular weight [g/mol]']
+H_VAPORIZATION = MODEL_BC_IC.PDE_PHYSICS_INPUT['H_VAPORIZATION [J/g]']
 
 
 def absorption(rh: 'array fraction') -> float:
@@ -190,9 +190,9 @@ def epsilon_equations(variables, *extra_args):
     epsilon_gas, epsilon_fiber, epsilon_water = variables
     rho_effective, rho_water, rho_fiber, rho_gas, regain = extra_args
 
-    first_eq = 1 - epsilon_gas - epsilon_water - epsilon_fiber
-    second_eq = epsilon_fiber - ((epsilon_water * rho_water) / (rho_fiber * regain))
-    third_eq = rho_effective - epsilon_water * rho_water - epsilon_fiber * rho_fiber - epsilon_gas * rho_gas
+    first_eq = 1 - epsilon_gas - epsilon_water - epsilon_fiber  # Equation 2.3
+    second_eq = epsilon_fiber - ((epsilon_water * rho_water) / (rho_fiber * regain))  # Equation 3.2
+    third_eq = rho_effective - epsilon_water * rho_water - epsilon_fiber * rho_fiber - epsilon_gas * rho_gas  # Eq 3.3
 
     return [first_eq, second_eq, third_eq]
 

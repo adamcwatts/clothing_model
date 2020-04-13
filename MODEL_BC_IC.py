@@ -63,7 +63,8 @@ PDE_PHYSICS_INPUT = \
         'sigma': 5.67 * 10 ** (-8),  # [w /m^2 K]
         'h_convection': 7.75,  # [W/m^2 K]
         # Heat transfer coefficient of air convection assuming boundary air-layer between outer clothing and environment
-        'R [J/mol K]': 8.3145,
+        'R [J/mol K]': 8.3145,  # [J/mol K]
+        'H_VAPORIZATION [J/g]':  2418,  # J / g
     }
 
 NUMBER_OF_NODES = 15
