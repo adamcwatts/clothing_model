@@ -4,6 +4,7 @@ import MODEL_BC_IC
 import math
 import scipy.integrate as integrate
 from scipy.optimize import fsolve
+import matplotlib.pyplot as plt
 from time import time
 
 MOLECULAR_WEIGHT_H2O = 18.01528  # [g / mol]
@@ -27,7 +28,7 @@ def absorption(rh: 'array fraction') -> float:
     # g_ones = np.where(rh > 1)
 
     gain[np.where(rh <= 0)] = 0  # No negative relative humidity
-    gain[np.where(rh > 1)] = 2.64  # (PRE-CALCULATED MAX VALUE FROM FUNCTION CALL)
+    gain[np.where(rh >= 1)] = 2.64  # (PRE-CALCULATED MAX VALUE FROM FUNCTION CALL)
 
     g_proper = np.where((rh > 0) & (rh < 1))  # collect indices for satisfying this condition
     gain[g_proper] = vectorized_regain(rh[g_proper])
@@ -62,7 +63,11 @@ def absorption_nv(rh):
 
 
 def regain_function(rh: 'fraction') -> float:
-    return 0.55 * rh * ((1.0 / (0.25 + rh)) + (1.0 / (1.25 - rh)))
+    return 0.578 * rh * ((1.0 / (0.321 + rh)) + (1.0 / (1.262 - rh)))
+
+
+def regain_instant(epsilon_water, epsilon_fiber, rho_water, rho_fiber):
+    return (epsilon_water * rho_water) / (epsilon_fiber * rho_fiber)
 
 
 def h_vap_calc(t_celsius: 'celsius', t_kelvin: 'Kelvin') -> 'Joules/gram':
@@ -84,7 +89,7 @@ def h_sorp_calc(previous_rh, current_rh):
     # total change in heat of Sorption where positive values implies giving off heat due to sorption while
     # negative implies taking in heat (cooling) due to loosing bound water [J/g]
 
-    #TODO CHECK accuracy for Quad vs trapz integrate
+    # TODO CHECK accuracy for Quad vs trapz integrate
     return integrate.quad(h_absorption, previous_rh, current_rh)[0]  # return value only, not error too
 
 
@@ -105,27 +110,91 @@ def evap_res_to_diffusion_res(t_celsius: 'celsius', R_ef: 'm ^ 2 Pa / W') -> 's/
     return diffusion_resistance
 
 
-def fabric_parameters(fabric_dictionary) -> 'updated fabric dictionary':
-    AIR_SPECIFIC_HEAT_CAPACITY = 1.007  # [J/ kg K]
+def cp_ef_calc(water_dict, gas_dict, fiber_dict, air_dict, vapor_dict, fabric_dict):
+    epsilon_water = water_dict['water: volume fraction bound [-]']
+    rho_water = water_dict['water: density [Kg/ m^3]']
+    C_water = water_dict['water: specific heat [J/ Kg K]']
 
-    fabric_porosity = 1 - fabric_dictionary['porosity of air in fabric']  # estimated porosity of fabric
-    p_fab_dry = fabric_dictionary['dry fiber density'] * fabric_porosity  # [kg/m^3]
-    fabric_specific_heat_capacity = (fabric_dictionary['fiber specific heat'] * fabric_porosity) + \
-                                    (fabric_dictionary['porosity of air in fabric'] * AIR_SPECIFIC_HEAT_CAPACITY)
+    epsilon_gas = gas_dict['gas: volume fraction [-]']
 
-    # Diffusion Resistance based off isothermal temperature setup at 35C
-    diffusion_resistance = evap_res_to_diffusion_res(MODEL_BC_IC.BOUNDARY_INPUT_PARAMETERS['plate temp'],
-                                                     fabric_dictionary['R_ef'])
-    diffusivity_water_though_fabric = fabric_dictionary['fabric thickness'] / diffusion_resistance
+    C_air = air_dict['air: specific heat [J/ Kg K]']
+    rho_air = air_dict['air: dry density [Kg/m^3]']
+    C_vapor = vapor_dict['water vapor: specific heat [J/ Kg K]']
+    rho_vapor = vapor_dict['water vapor: density [Kg/m^3]']
 
-    fabric_dictionary['fabric porosity'] = fabric_porosity
-    fabric_dictionary['dry fabric density [kg/m^3]'] = p_fab_dry
-    fabric_dictionary['dry fabric density [g/m^3]'] = p_fab_dry * 1000
-    fabric_dictionary['fabric specific heat capacity [J/ Kg K]'] = fabric_specific_heat_capacity
-    fabric_dictionary['diffusion resistance through fabric [s/m]'] = diffusion_resistance
-    fabric_dictionary['diffusivity of water though fabric [m^2 /s]'] = diffusivity_water_though_fabric
+    epsilon_fiber = fiber_dict['fiber: volume fraction [-]']
+    rho_fiber = fiber_dict['fiber: density dry [kg/m^3]']
+    C_fiber = fiber_dict['fiber: specific heat [J/ Kg K]']
 
-    return fabric_dictionary
+    water_part = epsilon_water * rho_water * C_water
+    gas_part = epsilon_gas * (C_air * rho_air + C_vapor * rho_vapor)
+    fiber_part = epsilon_fiber * rho_fiber * C_fiber
+
+    C_ef = (water_part + gas_part + fiber_part) / fabric_dict['fabric: density effective [kg/m^3]']
+
+    return C_ef
+
+
+def k_ef_calc(gas_dict, water_dict, fiber_dict, k_solid):
+    k_gas = gas_dict['gas: thermal conductivity [W/ K m]']
+    epsilon_gas = gas_dict['gas: volume fraction [-]']
+
+    epsilon_water = water_dict['water: volume fraction bound [-]']
+    epsilon_fiber = fiber_dict['fiber: volume fraction [-]']
+
+    numerator = epsilon_gas * k_gas + (1 + epsilon_water + epsilon_fiber) * k_solid
+    denominator = epsilon_gas * k_solid + (1 + epsilon_water + epsilon_fiber) * k_gas
+
+    k_ef = k_gas * (numerator / denominator)
+    return k_ef
+
+
+def cp_gas_calc(air_dict, vapor_dict, gas_dict) -> 'updated fabric dictionary':
+    C_a = air_dict['air: specific heat [J/ Kg K]']
+    rho_air = air_dict['air: dry density [Kg/m^3]']
+    C_vapor = vapor_dict['water vapor: specific heat [J/ Kg K]']
+    rho_vapor = vapor_dict['water vapor: density [Kg/m^3]']
+
+    C_gas = (C_a * rho_air + C_vapor * rho_vapor) / gas_dict['gas: density effective [Kg/m^3]']
+
+    return C_gas
+
+
+def k_gas_calc(air_dict, vapor_dict, gas_dict):
+    k_air = air_dict['air: thermal conductivity [W/ K m]']
+    rho_air = air_dict['air: dry density [Kg/m^3]']
+    k_vapor = vapor_dict['water vapor: thermal conductivity [W/ K m]']
+    rho_vapor = vapor_dict['water vapor: density [Kg/m^3]']
+
+    k_gas = (k_vapor * rho_vapor + k_air * rho_air) / gas_dict['gas: density effective [Kg/m^3]']
+    return k_gas
+
+
+def k_solid_calc(water_dict, fiber_dict):
+    k_water = water_dict['water: thermal conductivity [W/ K m]']
+    rho_water = water_dict['water: density [Kg/ m^3]']
+    epsilon_water = water_dict['water: volume fraction bound [-]']
+
+    k_fiber = fiber_dict['fiber: thermal conductivity [W/ K m]']
+    rho_fiber = fiber_dict['fiber: density dry [kg/m^3]']
+    epsilon_fiber = fiber_dict['fiber: volume fraction [-]']
+
+    k_solid = (k_water * rho_water * epsilon_water + k_fiber * rho_fiber * epsilon_fiber) / (
+            rho_water * epsilon_water + rho_fiber * epsilon_fiber)
+    return k_solid
+
+
+def epsilon_equations(variables, *extra_args):
+    # Equations to solve. Once solved using fsolve, returns
+
+    epsilon_gas, epsilon_fiber, epsilon_water = variables
+    rho_effective, rho_water, rho_fiber, rho_gas, regain = extra_args
+
+    first_eq = 1 - epsilon_gas - epsilon_water - epsilon_fiber
+    second_eq = epsilon_fiber - ((epsilon_water * rho_water) / (rho_fiber * regain))
+    third_eq = rho_effective - epsilon_water * rho_water - epsilon_fiber * rho_fiber - epsilon_gas * rho_gas
+
+    return [first_eq, second_eq, third_eq]
 
 
 def fabric_1D_meshing_old(fabric_dictionary, number_of_nodes,
@@ -167,14 +236,19 @@ def fabric_1D_meshing_old(fabric_dictionary, number_of_nodes,
     return node_length
 
 
-def node_generator(fabric_dictionary, number_of_nodes):
+def node_generator(flag, fabric_length=1e-3, node_number=10):
     # Generates 1D nodes from inputs, such as thickness of fabric and number of nodes desired
     # 1) Total_Thickness: Total thickness of the fabric in units of meters [m] (data type- double, 1x1 array)
     # 2) Number of elements: How many times to split up fabric
     #  e.g. 10mm fabric where 5=number of elements, 1.125; 2.5; 2.5; 2.5; 1.125 element thickness
     #   (data type- double, 1x1 array)
+    if flag:
+        L = MODEL_BC_IC.FABRIC_INPUT_PARAMETERS['fabric: thickness [m]']
+        number_of_nodes = MODEL_BC_IC.NUMBER_OF_NODES
+    else:
+        L = fabric_length
+        number_of_nodes = node_number
 
-    L = fabric_dictionary['fabric thickness']
     num_interior_nodes, num_exterior_nodes = number_of_nodes - 1, 2
     # 2 exterior end nodes equal 1 entire node
 
@@ -323,25 +397,25 @@ def wet_fabric_calc(fabric_df, environmental_rh) -> 'wet_fabric_df':  # TODO Don
     extracted_data = fabric_df.iloc[0]
     absorption_factor = absorption(environmental_rh)
 
-    gamma = (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor) / extracted_data.iloc[6]
+    epsilon = (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor) / extracted_data.iloc[6]
     #  (p_fab_dry*Regain*Absorption(Relative_Humidities)) / p_fab_dry
     # fractional density of water in fabric
 
-    wet_fabric_properties['density fraction of water in fabric [kg/m^3]'] = gamma
+    wet_fabric_properties['density fraction of water in fabric [-]'] = epsilon
 
     wet_fabric_density = extracted_data.iloc[6] + (extracted_data.iloc[6] * extracted_data.iloc[3] * absorption_factor)
     # corrected density including water in fabric
 
     wet_fabric_properties['wet fabric density [kg/m^3]'] = wet_fabric_density
 
-    wet_fabric_specific_heat = extracted_data.iloc[8] * (1 - gamma) + gamma * WATER_SPECIFIC_HEAT_CAPACITY
+    wet_fabric_specific_heat = extracted_data.iloc[8] * (1 - epsilon) + epsilon * WATER_SPECIFIC_HEAT_CAPACITY
     wet_fabric_properties['wet fabric specific heat [J/kg K]'] = wet_fabric_specific_heat
 
-    wet_fabric_thermal_conductivity = FABRIC_THERMAL_CONDUCTIVITY * (1 - gamma) + gamma * THERMAL_CONDUCTIVITY_WATER
+    wet_fabric_thermal_conductivity = FABRIC_THERMAL_CONDUCTIVITY * (1 - epsilon) + epsilon * THERMAL_CONDUCTIVITY_WATER
     wet_fabric_properties['wet fabric thermal conductivity [W/mk]'] = wet_fabric_thermal_conductivity
 
     wet_fabric_properties['Thermal Diffusivity [m^2/s]'] = wet_fabric_thermal_conductivity / (
-                wet_fabric_density * wet_fabric_specific_heat)
+            wet_fabric_density * wet_fabric_specific_heat)
 
     wet_fabric = pd.DataFrame.from_dict(wet_fabric_properties)
     wet_fabric.index = fabric_df.index
@@ -375,7 +449,7 @@ def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20
 
     guess = np.ones(water_vapor_concentration.shape[0]) * previous_rh
     # guess = np.array([0.6])
-    rh_solution = fsolve(func_3, guess, maxfev=25)
+    rh_solution = fsolve(func_3, guess, maxfev=50)  # 50 evals
 
     sorption = func_1(rh_solution)  # [grams / meter^3]
     equilibrium_air_concentration = concentration_calc(None, rh_solution, temperature)  # [grams / meter^3]
@@ -438,12 +512,6 @@ def condensation_checker(rh_array: 'relative humidity array', concentration: 'co
     return rh_array, concentration, condensation
 
 
-def dt_generator(min_dt):
-    base = math.ceil(math.fabs(math.log10(min_dt)))
-    # new_dt = math.floor(min_dt*10**base) / 10**base
-    return 10 ** (-base)
-
-
 # def condensation_checker2(ode_class, index, params=None) -> 'corrected RH array, updated concentration array':
 #     try:
 #         rh_array = ode_class.relative_humidity_post_absorption_history[index, :]
@@ -476,14 +544,35 @@ vectorized_h_sorp_cal = np.vectorize(h_sorp_calc, otypes=[float])
 # relative_humidity_calc = np.vectorize(relative_humidity_calc)
 
 if __name__ == '__main__':
-    temps = np.array([20, 30, 50])
-    temps_kelvin = temps + 273.15
-    rh_previous = np.array([0.0, 0, 0])
-    rh = np.array([0.0, 0.5, 1.2])
-    c = concentration_calc(temps, rh)
+    test_args = (
+        103.6, 1000.0, 1300.0, 1.161, 0.15 * absorption(MODEL_BC_IC.FABRIC_INPUT_PARAMETERS['fabric: initial RH [-]']))
+
+    sol_val = fsolve(epsilon_equations, (0.9, 0.09, 0.01), args=test_args)
+    print(sol_val * 100)
+
+    RH = 0.40
+    partial_vapor = RH * saturated_vapor_pressure(35.0) * 1000  # convert to Pa
+    density_vapor = (partial_vapor * MOLECULAR_WEIGHT_H2O * (1 / 1000) / (8.3125 * (273.15 + 35)))
+
+    rho_humid = partial_vapor / (461.495 * (273.15 + 35))
+    rho_dry_air_35C = 1161e-3
+    # print(rho_humid[0], rho_dry_air_35C)
+    print(density_vapor, rho_humid)
+    # rho_effective = extra_args[0]
+    # rho_water = extra_args[1]
+    # rho_fiber = extra_args[2]
+    # rho_gas = extra_args[3]
+    # regain = extra_args[4]
+
+    # print(absorption(1))
+    # temps = np.array([20, 30, 50])
+    # temps_kelvin = temps + 273.15
+    # rh_previous = np.array([0.0, 0, 0])
+    # rh = np.array([0.0, 0.5, 1.2])
+    # c = concentration_calc(temps, rh)
 
     # print(condensation_checker(rh, c, temps_kelvin))
 
     # print(vectorized_h_sorp_cal(rh_previous, rh))
-
+    # print(relative_humidity_calc(6.25330, 292.57066))
     # print(h_vap_calc.__annotations__)
