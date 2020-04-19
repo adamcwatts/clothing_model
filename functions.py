@@ -431,6 +431,14 @@ def relative_humidity_calc(concentration: 'grams / m^3 H20 in air', temp_kelvin:
 
     return relative_humidity
 
+def RH_calc_basic(vapor_pressure, saturated_vapor_pressure):
+
+    RH = vapor_pressure / saturated_vapor_pressure
+
+    if RH > 1:
+        RH = 1
+
+    return RH
 
 def rh_equilibrium(fabric_dataframe, water_vapor_concentration: "grams / m^3 H20 in the air", temperature: 'Kelvin',
                    previous_rh: 'Fabrics previous RH state') -> \

@@ -29,6 +29,7 @@ WATER_INPUT_PARAMETERS = {
     'water: specific heat [J/ Kg K]':  4179,  # [J / (kg K)]
     'water: thermal conductivity [W/ K m]': 0.613,
     'water: molecular weight [g/mol]': 18.01528,  # [g / mol]
+    'water: molecular weight [kg/mol]': 18.01528 / 1000,  # [kg / mol]
     # T. Bergman and A. Lavine, Fundamentals of Heat and Mass Transfer, 8th ed. Wiley.
 }
 
@@ -48,10 +49,10 @@ AIR_INPUT_PARAMETERS = {
 
 BOUNDARY_INPUT_PARAMETERS = \
     {
-        'air temp': 35.0,  # [Celsius]
-        'plate temp': 35.0,  # [Celsius]
-        'air rh': 0.4,  # [fraction from 0 to 1]
-        'plate rh': 1.0,  # [fraction from 0 to 1]
+        'air: temp': 35.0,  # [Celsius]
+        'plate: temp': 35.0,  # [Celsius]
+        'air: rh': 0.4,  # [fraction from 0 to 1]
+        'plate: rh': 1.0,  # [fraction from 0 to 1]
     }
 
 
