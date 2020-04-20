@@ -139,8 +139,7 @@ class SolutionTree:
         self.water_vapor_concen_history[0, :] = my_pde.materials.VAPOR['water vapor: density [Kg/m^3]']
 
         self.conden_concen_history = np.copy(zeros_array)  # [(kg/m^3]  NEED TO VERIFY
-        self.fabric_sorption_history = np.copy(
-            zeros_array)  # [g/m^3] :  water density absorbed or desorbed by fabric
+        self.fabric_sorption_history = np.copy(zeros_array)  # [kg/m^3] :  water density absorbed or desorbed by fabric
 
         # self.fiber_water_concen_history = np.copy(zeros_array)  # [(kg/m^3]
         # self.fiber_water_concen_history[0, :] = my_pde.fabric_df[
@@ -187,6 +186,7 @@ class Material:
 class SolutionSetup:
     def __init__(self, material_list, grid_dimensions, allocated_time_size, dt, BC_kelvin):
         self.counter = int(0)
+        self.count_to = allocated_time_size
         self.node_count = BC_IC.NUMBER_OF_NODES
         # self.fabric_wet_df = fabric_df_wet  # Imports wet fabric dataframe, updates each time step
         # self.fabric_IC = fabric_ic  # Imports fabric initial conditions dataframe,
@@ -339,23 +339,25 @@ class SolutionSetup:
                 self.Solutions.rh_post_absorption_history[i + 1, :] = self.Solutions.rh_history[i + 1, :]
 
         if self.Coupling_Option['Coupled Equilibrium'] == couple_choice:  # 2 -> COUPLED EQ
-            self.post_concentration(0 + 1)
-            self.post_concentration_sorption_flows(0 + 1)
-            self.fabric_wet_df = functions.wet_fabric_calc(df_fabric_initial_conditions,
-                                                           self.Solutions.rh_post_absorption_history[0 + 1, :])
-            for i in range(1, end_value):
-                print_progressbar(i, end_value, prefix='Progress', suffix='Complete', length=50)
-                # print(i)
-                A, Phi = self.heat_matrix_ftcs_gen(t=i)
-                self.Solutions.temp_k_history[i + 1, :] = PDE.FTCS_heat(A, Phi, t=i)
 
-                B = self.diffusion_matrix_ftcs_gen()
-                self.Solutions.raw_water_concen_history[i + 1, :] = self.FTCS_diffusion(B, t=i)
+            # First time time through SCHEME
+            A, Phi = PDE.heat_matrix_ftcs_gen()
+            first_temp = np.append(PDE.Solutions.temp_k_history[0, :], PDE.BC_K['air: temp [K]'])
+            first_temp[0] = PDE.BC_K['plate: temp [K]']
 
-                self.post_concentration(i + 1)
-                self.post_concentration_sorption_flows(i + 1)
-                self.fabric_wet_df = functions.wet_fabric_calc(df_fabric_initial_conditions,
-                                                               self.Solutions.rh_post_absorption_history[i + 1, :])
+            # dont include last value, since its T_ambient
+            PDE.Solutions.temp_k_history[0 + 1, :] = np.matmul(A, first_temp)[0:-1] + Phi
+
+            B = PDE.diffusion_matrix_ftcs_gen()
+            first_concen = np.append(PDE.Solutions.water_vapor_concen_history[0, :],
+                                     PDE.BC_K['water: concentration in ambient air [kg/m^3]'])
+            first_concen[0] = PDE.BC_K['water: concentration at plate [kg/m^3]']
+            self.Solutions.rh_history[1, 0] = 1.00  # Fabric Surface Instantly at 100% RH
+
+            PDE.solve_coupling(B, first_concen)
+            self.post_concentration_sorption_flows()
+            for i in range(1, self.count_to):
+                print_progressbar(i, self.count_to, prefix='Progress', suffix='Complete', length=50)
 
                 # update fabric properties due to regain
 
@@ -452,26 +454,46 @@ class SolutionSetup:
 
         return a
 
-    def m_dot(self):
-        m_dot_vs = 16 * self.materials.FIBER['fiber: diffusion to diameter [1/s]'] * \
-                   self.materials.FIBER['fiber: volume fraction [-]'] * \
-                   self.materials.FIBER['fiber: density dry [kg/m^3]']
+    def m_dot(self, rho_vapor, node):
+        # TODO Redundent code but still needed, FUNCTION?
+        rho_water = self.materials.WATER['water: density [Kg/ m^3]']
+        eps_water_prev = self.Solutions.volume_fraction_water_history[self.counter, node]
+        eps_fiber = self.materials.FIBER['fiber: volume fraction [-]']
+        rho_fiber = self.materials.FIBER['fiber: density dry [kg/m^3]']
+        sorp_rate_factor = 16 * self.materials.FIBER['fiber: diffusion to diameter [1/s]']
+        regain_inst = ((eps_water_prev * rho_water) / (eps_fiber * rho_fiber))
 
-        regain_eq = self.materials.FIBER['fiber: regain[-]'] * functions.absorption(self.Solutions.rh_history)
+        temp_at_node_K = PDE.Solutions.temp_k_history[self.counter, node]  # Kelvin
+        temp_at_node_C = temp_at_node_K - 273.15
 
-        epsilon_water = self.fabric_df['VF: water [-]']
-        epsilon_fiber = self.fabric_df['VF: fiber [-]']
+        P_sat = functions.saturated_vapor_pressure(temp_at_node_C, None)[0]  # kPa
+        P_sat *= 1000  # Pa
 
-        ones = np.ones(self.node_count)
+        # Pa
+        Pa_v = rho_vapor * PI['R [J/mol K]'] * temp_at_node_K / self.materials.WATER['water: molecular weight [kg/mol]']
+        RH = functions.RH_calc_basic(Pa_v, P_sat)
+        regain_eq = self.materials.FIBER['fiber: regain[-]'] * functions.regain_function(RH)
 
-        rho_water = self.materials.WATER['water: density [Kg/ m^3]'] * ones
-        rho_fiber = self.materials.FIBER['fiber: density [Kg/ m^3]'] * ones
+        m_vs = sorp_rate_factor * eps_fiber * rho_fiber * (regain_eq - regain_inst)  # [kg / m^3]
+        # m_dot_vs = 16 * self.materials.FIBER['fiber: diffusion to diameter [1/s]'] * \
+        #            self.materials.FIBER['fiber: volume fraction [-]'] * \
+        #            self.materials.FIBER['fiber: density dry [kg/m^3]']
+        #
+        # regain_eq = self.materials.FIBER['fiber: regain[-]'] * functions.absorption(self.Solutions.rh_history)
+        #
+        # epsilon_water = self.fabric_df['VF: water [-]']
+        # epsilon_fiber = self.fabric_df['VF: fiber [-]']
+        #
+        # ones = np.ones(self.node_count)
+        #
+        # rho_water = self.materials.WATER['water: density [Kg/ m^3]'] * ones
+        # rho_fiber = self.materials.FIBER['fiber: density [Kg/ m^3]'] * ones
+        #
+        # regain_instant = functions.regain_instant(epsilon_water, epsilon_fiber, rho_water, rho_fiber)
+        # delta_regain = regain_eq - regain_instant
+        # m_dot_vs *= delta_regain
 
-        regain_instant = functions.regain_instant(epsilon_water, epsilon_fiber, rho_water, rho_fiber)
-        delta_regain = regain_eq - regain_instant
-        m_dot_vs *= delta_regain
-
-        return m_dot_vs
+        return m_vs, RH
 
     def coupling_equations(self, variables, *extra_args):
         eps_gas, eps_water, rho_vapor = variables  # solve these variables for next time step
@@ -485,54 +507,60 @@ class SolutionSetup:
         sorp_rate_factor = 16 * self.materials.FIBER['fiber: diffusion to diameter [1/s]']
         regain_inst = ((eps_water_prev * rho_water) / (eps_fiber * rho_fiber))
 
-        #TODO RH_EQ is really a function rho_vapor
-
         temp_at_node_K = PDE.Solutions.temp_k_history[self.counter, node]  # Kelvin
         temp_at_node_C = temp_at_node_K - 273.15
 
-        P_sat = functions.saturated_vapor_pressure(temp_at_node_C, None)[0]    # kPa
+        P_sat = functions.saturated_vapor_pressure(temp_at_node_C, None)[0]  # kPa
         P_sat *= 1000  # Pa
 
         # Pa
         Pa_v = rho_vapor * PI['R [J/mol K]'] * temp_at_node_K / self.materials.WATER['water: molecular weight [kg/mol]']
-
-        # RH = self.Solutions.rh_history[self.counter, node]
         RH = functions.RH_calc_basic(Pa_v, P_sat)
+        regain_eq = self.materials.FIBER['fiber: regain[-]'] * functions.regain_function(RH)
 
-        regain_eq = self.materials.FIBER['fiber: regain[-]'] * functions.absorption(RH)[0]
+        m_vs = sorp_rate_factor * eps_fiber * rho_fiber * (regain_eq - regain_inst)  # [kg / m^3]
 
         # continuity equation for volume fraction for future time step
         EQ1 = 1 - eps_gas - eps_water - eps_fiber
+        EQ2 = rho_water * ((eps_water - eps_water_prev) / self.dt) - m_vs
+        EQ3 = eps_gas * rho_vapor - np.dot(B_matrix[node, :], eps_gas_prev * water_vapor_concen) + EQ2 * self.dt
 
-        term_1 = rho_water * (eps_water - eps_water_prev) / self.dt
-        term_2 = sorp_rate_factor * eps_fiber * rho_fiber * (regain_eq - regain_inst)
-        EQ2 = term_1 - term_2
-
-        EQ3 = eps_gas * rho_vapor - np.dot(B_matrix[node, :], eps_gas_prev*water_vapor_concen) + EQ2
+        # continuity equation for volume fraction for future time step
+        # EQ1 = 1 - eps_gas - eps_water - eps_fiber
+        #
+        # term_1 = rho_water * (eps_water - eps_water_prev) / self.dt
+        # term_2 = sorp_rate_factor * eps_fiber * rho_fiber * (regain_eq - regain_inst)
+        # EQ2 = term_1 - term_2
+        #
+        # EQ3 = eps_gas * rho_vapor - np.dot(B_matrix[node, :], eps_gas_prev*water_vapor_concen) + EQ2
 
         return [EQ1, EQ2, EQ3]
 
     def solve_coupling(self, b_matrix, concen_array):
-        for node in range(1, self.node_count + 1):
+        # TODO FIGURE OUT WHY 2nd Node onward actually decrease their rho_vapor
+        for node in range(1, self.node_count):
             x_0 = np.array([0.9, 0.007, 0.013])
-            sol = fsolve(self.coupling_equations, x_0, args=(B, node, concen_array))
-            prior_values = np.array([PDE.fabric_df["VF: gas [-]"][1],
-                                     PDE.fabric_df["VF: water [-]"][1],
-                                     PDE.Solutions.water_vapor_concen_history[0, 1]])
-            print(prior_values)
-            self.coupling_equations(sol, B, node, concen_array)
+            sol = fsolve(self.coupling_equations, x_0, args=(b_matrix, node, concen_array))
+            # prior_values = np.array([PDE.fabric_df["VF: gas [-]"][1],
+            #                          PDE.fabric_df["VF: water [-]"][1],
+            #                          PDE.Solutions.water_vapor_concen_history[0, 1]])
+            # print('Previous Values: ', prior_values)
+            print('Solution Values', sol, '  Time: ', self.dt * self.counter)
+            # self.coupling_equations(sol, b_matrix, node, concen_array)
 
-
-            PDE.Solutions.volume_fraction_water_history[self.counter, node] = sol[0]
-            PDE.Solutions.volume_fraction_gas_history[self.counter, node] = sol[1]
+            m_dot_vs, new_RH = self.m_dot(sol[2], node)
+            PDE.Solutions.volume_fraction_gas_history[self.counter + 1, node] = sol[0]
+            PDE.Solutions.volume_fraction_water_history[self.counter + 1, node] = sol[1]
             PDE.Solutions.water_vapor_concen_history[self.counter + 1, node] = sol[2]
-            RH = functions.relative_humidity_calc(sol[2] / 1000, PDE.Solutions.temp_k_history[self.counter, node])
-            print('\n' + f'Water Vapor Concen [kg/m^3] = {sol[2]}')
-            print(f'RH = {RH}')
-            print(f'My Function: {functions.concentration_calc([], RH, PDE.Solutions.temp_k_history[self.counter, node])}')
-            print()
-            print('test')
-
+            PDE.Solutions.rh_history[self.counter + 1, node] = new_RH
+            PDE.Solutions.fabric_sorption_history[self.counter + 1, node] = m_dot_vs
+            # RH = functions.relative_humidity_calc(sol[2] * 1000, PDE.Solutions.temp_k_history[self.counter, node])
+            # print('\n' + f'Water Vapor Concen [kg/m^3] = {sol[2]}')
+            # print(f'RH = {RH}')
+            # rho_water = functions.concentration_calc([], RH, PDE.Solutions.temp_k_history[self.counter, node]) / 1000
+            # print(f'My Function: {rho_water}')
+            # print()
+            # print('test')
 
     def FTCS_diffusion(self, ft_matrix, t=0):
         concentration_old = np.append(self.Solutions.water_vapor_concen_history[t, :],
@@ -615,15 +643,16 @@ class SolutionSetup:
 
         return None
 
-    def post_concentration_sorption_flows(self, index):
+    def post_concentration_sorption_flows(self):
         # REMEMBER INDEX ALREADY IS PLUS 1
-
-        node_thickness = self.fabric_IC['thickness [m]']
+        index = self.counter + 1
+        # TODO fix section for new method
+        node_thickness = self.materials.FABRIC['fabric: thickness [m]']
 
         # heat of sorption due to regain in [J/g]
         self.Solutions.enthalpy_sorption_history[index, :] = functions.vectorized_h_sorp_cal(
-            self.Solutions.rh_post_absorption_history[index - 1, :],
-            self.Solutions.rh_post_absorption_history[index, :])
+            self.Solutions.rh_history[index - 1, :],
+            self.Solutions.rh_history[index, :])
 
         flux = self.Solutions.fabric_sorption_history[index, :] * node_thickness / self.dt  # g /(m^2s)
 
@@ -651,7 +680,7 @@ class SolutionSetup:
 
 
 if __name__ == '__main__':
-    COUPLE_VAL = 1
+    COUPLE_VAL = 2
     start = BC_IC.TIME_INPUT_PARAMETERS['start']
     finish_seconds = BC_IC.TIME_INPUT_PARAMETERS['finish [min]'] * 60
     material_pack = SolutionSetup.material_parameters()
@@ -666,42 +695,34 @@ if __name__ == '__main__':
 
     boundary_conditions = boundary_conditions_with_kelvin(BC_IC.BOUNDARY_INPUT_PARAMETERS)
 
-    # fabric_data = functions.fabric_parameters(BC_IC.FABRIC_INPUT_PARAMETERS)
-
-    # fix_floats_to_numpy_array = convert_float_to_array(BC_IC.FABRIC_IC_INPUT)
-
-    # df_fabric_initial_conditions = fabric_initial_conditions_to_df(fix_floats_to_numpy_array, fabric_data,
-    #                                                                fabric_node_dimensions)
-    #
-    # df_wet_fabric = functions.wet_fabric_calc(df_fabric_initial_conditions,
-    #                                           df_fabric_initial_conditions['initial clothing rh'].to_numpy())
-
+    time_step = 0.005
     # initialize PDE CLASS arrays and key parameters
     PDE = SolutionSetup(material_pack, fabric_node_dimensions, t_size, time_step, boundary_conditions)
 
+    PDE.coupling_method(COUPLE_VAL)
+
     # First time time through SCHEME
-    A, Phi = PDE.heat_matrix_ftcs_gen()
-    first_temp = np.append(PDE.Solutions.temp_k_history[0, :], PDE.BC_K['air: temp [K]'])
-    first_temp[0] = PDE.BC_K['plate: temp [K]']
-
-    # dont include last value, since its T_ambient
-    PDE.Solutions.temp_k_history[0 + 1, :] = np.matmul(A, first_temp)[0:-1] + Phi
-
-    B = PDE.diffusion_matrix_ftcs_gen()
-    first_concen = np.append(PDE.Solutions.water_vapor_concen_history[0, :],
-                             PDE.BC_K['water: concentration in ambient air [kg/m^3]'])
-    first_concen[0] = PDE.BC_K['water: concentration at plate [kg/m^3]']
-
-    PDE.solve_coupling(B, first_concen)
+    # A, Phi = PDE.heat_matrix_ftcs_gen()
+    # first_temp = np.append(PDE.Solutions.temp_k_history[0, :], PDE.BC_K['air: temp [K]'])
+    # first_temp[0] = PDE.BC_K['plate: temp [K]']
+    #
+    # # dont include last value, since its T_ambient
+    # PDE.Solutions.temp_k_history[0 + 1, :] = np.matmul(A, first_temp)[0:-1] + Phi
+    #
+    # B = PDE.diffusion_matrix_ftcs_gen()
+    # first_concen = np.append(PDE.Solutions.water_vapor_concen_history[0, :],
+    #                          PDE.BC_K['water: concentration in ambient air [kg/m^3]'])
+    # first_concen[0] = PDE.BC_K['water: concentration at plate [kg/m^3]']
+    #
+    # PDE.solve_coupling(B, first_concen)
 
     # x_0 = np.array([0.9, 0.007, 0.013])
     # test_sol = fsolve(PDE.coupling_equations, x_0, args=(B, 1, first_concen))
     # print(test_sol - prior_values)
 
-    PDE.Solutions.raw_water_concen_history[0 + 1, :] = np.matmul(B, first_concen)[0: -1]  # dont include air boundary
-    PDE.dirichlet_step()
-    end_value = t_size - 1
+    # PDE.Solutions.raw_water_concen_history[0 + 1, :] = np.matmul(B, first_concen)[0: -1]  # dont include air boundary
+    # PDE.dirichlet_step()
+    # end_value = t_size - 1
 
-    PDE.coupling_method(COUPLE_VAL)
     print('DONE')
     solution_to_df(PDE)
